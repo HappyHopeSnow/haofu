@@ -11,9 +11,9 @@
 <body>
 <div class="m_side_btns" id="m_side_btns">
 	<a class="side_btn toTopBtn" href="javascript:;" id="returnToTop" style="display:none;">回 到顶 部</a>
-	<a class="side_btn surveyBtn" href="javascript:;">问 卷调 查</a>
+	<%--<a class="side_btn surveyBtn" href="javascript:;">问 卷调 查</a>
 	<a class="side_btn helpBtn" href="javascript:;">帮 助中 心</a>
-	<a class="side_btn fbBtn" href="javascript:;">意 见反 馈</a>
+	<a class="side_btn fbBtn" href="javascript:;">意 见反 馈</a>--%>
 </div>
 <!--顶部-->
 <div class="g_header">
