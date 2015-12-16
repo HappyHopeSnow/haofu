@@ -1,0 +1,1263 @@
+/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("yui-throttle",function(e,t){
+/*! Based on work by Simon Willison: http://gist.github.com/292562 */
+;e.throttle=function(t,n){n=n?n:e.config.throttleTime||150;if(n===-1)return function(){t.apply(this,arguments)};var r=e.Lang.now();return function(){var i=e.Lang.now();i-r>n&&(r=i,t.apply(this,arguments))}}},"3.16.0",{requires:["yui-base"]});
+
+;/*jshint white:true,unused:true*/
+/**
+ * Cross Domain/Site LocalStorage
+ * @module mt-xsstorage
+ *
+ * 调用 getInstance 返回跨域存储的实例，主要包括一个 getItem 方法
+ * var storage = XSStorage.getInstance();
+ */
+M.add('mt-xsstorage', function (Y) {
+    var Cookie = Y.mt.cookie,
+        $Lang = Y.Lang;
+
+    var globalConfig = M && M.Env['data-conf'] || {},
+        siteOrigin = 'http://' + (globalConfig.rootHost || 'www.meituan.com'),
+        domainHost = M && M.DOMAIN_HOST || 'meituan.com',
+        defaultSrc = '/xsstorage.html';
+
+    // 三种存储的单例
+    var cookieStorage,
+        exLocalStorage,
+        crossSiteStorage;
+
+    var isSupportXSStorage = (function () {
+        var test = 'teststorage',
+            isHttp = window.location.protocol === 'http:';
+
+        if (!window.JSON || !window.postMessage || !isHttp) {
+            return false;
+        }
+
+        try {
+            localStorage.setItem(test, test);
+            var fetchTest = localStorage.getItem(test);
+            localStorage.removeItem(test);
+
+            return fetchTest === test;
+        } catch (e) {
+            return false;
+        }
+    })();
+
+    // 部分 localStorage API 的 Cookie 实现
+    var getCookieStorage = function () {
+        if (cookieStorage) {
+            return cookieStorage;
+        }
+
+        var KEY_PREFIX = '_ls_';
+        cookieStorage = {
+            getItem: function (key, callback, context) {
+                key = KEY_PREFIX + key;
+                var value = Cookie.get(key);
+
+                context = context || null;
+                if (callback) {
+                    callback.call(context, value);
+                }
+                return value;
+            },
+            getAndRemove: function (key, callback, context) {
+                var value = cookieStorage.getItem(key, callback, context);
+                localStorage.removeItem(key);
+                return value;
+            },
+            setItem: function (key, value) {
+                key = KEY_PREFIX + key;
+                if ($Lang.isObject(value)) {
+                    value = Y.JSON.stringify(value);
+                }
+                Cookie.set(
+                    key,
+                    value,
+                    Cookie.getExpiresDate(30, 0, 0),
+                    '/',
+                    domainHost
+                );
+            },
+            removeItem: function (key) {
+                key = KEY_PREFIX + key;
+                Cookie.remove(key, '/', domainHost);
+            },
+            appendItem: function (key, value) {
+                key = KEY_PREFIX + key;
+                var oldVal = Cookie.get(key);
+                Cookie.set(
+                    key,
+                    oldVal + value,
+                    Cookie.getExpiresDate(30, 0, 0),
+                    '/',
+                    domainHost
+                );
+            }
+        };
+
+        return cookieStorage;
+    };
+
+    // 不需要跨域情况下的 localStorage 的一些简单方法的抽离和封装
+    var getLocalStorage = function () {
+        if (exLocalStorage) {
+            return exLocalStorage;
+        }
+
+        var methodArr = ['setItem', 'removeItem', 'clear'];
+
+        exLocalStorage = {
+            getItem: function (key, callback, context) {
+                var value = localStorage.getItem(key);
+                context = context || null;
+                if (callback) {
+                    callback.call(context, value);
+                }
+                return value;
+            },
+            getAndRemove: function (key, callback, context) {
+                var value = exLocalStorage.getItem(key, callback, context);
+                localStorage.removeItem(key);
+                return value;
+            },
+            appendItem: function (key, value) {
+                var oldVal = localStorage.getItem(key) || '';
+                localStorage.setItem(key, oldVal + value);
+            }
+        };
+
+        Y.Array.each(methodArr, function (methodName) {
+            exLocalStorage[methodName] = function () {
+                localStorage[methodName].apply(localStorage, arguments);
+            };
+        });
+
+        return exLocalStorage;
+    };
+
+    // 跨域的 localStorage
+    var getCrossSiteStorage = function () {
+        if (crossSiteStorage) {
+            return crossSiteStorage;
+        }
+
+        var ndIframe = Y.Node.create('<iframe width="1" height="1" frameborder="0" style="position:absolute;top:0;left:-9999px;"></iframe>'),
+            requestInfo = {}, // 记录一次操作的 id，以及对应的 callback
+            requestID = 0,
+            requestQueue = [], // iframe 还没加载完时存放操作的 queue
+            isIframeReady = false;
+
+        crossSiteStorage = {
+            getItem: function (key, callback, context) {
+                crossSiteStorage._apihub('getItem', {
+                    key: key,
+                    callback: callback,
+                    context: context
+                });
+            },
+            getAndRemove: function (key, callback, context) {
+                crossSiteStorage._apihub('getAndRemove', {
+                    key: key,
+                    callback: callback,
+                    context: context
+                });
+            },
+            setItem: function (key, val) {
+                crossSiteStorage._apihub('setItem', {
+                    key: key,
+                    val: val
+                });
+            },
+            appendItem: function (key, val) {
+                crossSiteStorage._apihub('appendItem', {
+                    key: key,
+                    val: val
+                });
+            },
+            removeItem: function (key) {
+                crossSiteStorage._apihub('removeItem', {
+                    key: key
+                });
+            },
+            clear: function () {
+                crossSiteStorage._apihub('clear');
+            },
+            _apihub: function (methodName, data) {
+                var rid,
+                    context,
+                    callback = data.callback,
+                    requestData = {
+                        method: methodName,
+                        args: {
+                            key: data.key,
+                            value: data.val
+                        }
+                    };
+
+
+                if (callback) {
+                    rid = requestID++;
+                    context = data.context || null;
+                    requestInfo[rid] = {
+                        cb: callback,
+                        ctx: context
+                    };
+                    requestData.args.rid = rid;
+                }
+
+                if (!isIframeReady) {
+                    requestQueue.push(requestData);
+                    return;
+                }
+
+                crossSiteStorage._sendRequest(requestData);
+            },
+            _sendRequest: function (requestData) {
+                var iframeElem = Y.Node.getDOMNode(ndIframe);
+                iframeElem.contentWindow.postMessage(Y.JSON.stringify(requestData), siteOrigin);
+            },
+            // iframe 返回数据后根据 requestID 去执行对应的 callback
+            _handleMsg: function (data) {
+                if (!data) {
+                    return;
+                }
+
+                var rid = data.rid,
+                    info;
+
+                if (Y.Lang.isUndefined(rid) || !(info = requestInfo[rid])) {
+                    return;
+                }
+
+                info.cb.call(info.ctx, data.value);
+                delete requestInfo[rid];
+            }
+        };
+
+        // 初始化
+        ndIframe.set('src', siteOrigin + defaultSrc);
+        Y.one('body').append(ndIframe);
+
+        ndIframe.on('load', function () {
+            isIframeReady = true;
+            // 执行 q 里的函数
+            Y.Array.each(requestQueue, crossSiteStorage._sendRequest);
+        });
+
+        Y.one(window).on('message', function (e) {
+            if (e._event.origin !== siteOrigin) {
+                return;
+            }
+
+            var data = JSON.parse(e._event.data);
+            crossSiteStorage._handleMsg(data);
+        });
+
+        return crossSiteStorage;
+    };
+
+    Y.namespace('mt.XSStorage');
+    Y.mt.XSStorage = {
+        /**
+         * 是否支持跨域的 localStorage，非 Cookie 实现
+         * 
+         * @property isSupportXSStorage
+         * @type {Boolean}
+         * @default false
+         */
+        isSupportXSStorage: isSupportXSStorage,
+        /**
+         * 根据传参不同返回不同类型跨域存储的单例
+         * 只每种 storage 最多保留一个实例
+         * @method getInstance
+         * @param {Object} config
+         * @param {Boolean} [config.forceAsync] false 是否强制使用异步的 getItem/setItem
+         * @param {Boolean} [config.enableFallback] false 在不支持 localStorage 的浏览器上是否使用 cookie 作为 fallback，慎用
+         * @return {Object} 跨域存储的单例
+         */
+        getInstance: function (config) {
+            config = config || {};
+            var forceAsync = !!config.forceAsync,
+                enableFallback = !!config.useCookie;
+
+            if (!isSupportXSStorage) {
+                if (!enableFallback) {
+                    return false;
+                }
+
+                // Cookie 实现的 localStorage 的 API
+                return getCookieStorage();
+            }
+
+            // 返回简单封装的 localStorage 方法
+            if (location.origin === siteOrigin && !forceAsync) {
+                return getLocalStorage();
+            }
+
+            return getCrossSiteStorage();
+        }
+    };
+},
+//version
+'1.0.0',
+//dependency
+{
+    requires: ['mt-base']
+});
+
+;/*jshint white:true, unused:true*/
+/**
+ * 日志发送机制
+ *
+ * 支持调用 Beacon 上的方法发送 beacon 请求时使用无需在使用时声明依赖
+ * 需将定义如下的一个带有静态数组 _q 的全局函数，在使用前插入
+ * (function (w, mbq) {
+ *     w[mbq] = w[mbq] || function () {
+ *         (w[mbq]._q = w[mbq]._q || []).push(arguments);
+ *     };
+ * })(window, '_mbq');
+ *
+ * 使用时将函数名和实参作为 _mbq 的参数传入
+ * 比如:
+ *      window._mbq('blog', data);
+ *      window._mbq('eventlog', category, action, label, extra);
+ *
+ * 可以通过 Beacon.addBeaconMethods 向 Beacon 上添加新的方法，支持在
+ * 添加方法之前使用
+ * @module mt-beacon
+ */
+M.add('mt-beacon', function (Y) {
+        /**
+         * 一共有两层设置
+         * 所有类型beacon公用，如globalConf
+         * 某种类型独有，如globalConf.eventlog
+         * 类型独有的配置和数据将覆盖所有类型公用的
+         * 如果需要给所有类型的日志均指定发送走的数据，可在globalConf.data中添加，该属性也可以是一个方法，返回需要发送走的数据
+         * e.g. {
+         *  data: {},
+         *  blog: {
+         *      data: {}
+         *  }
+         * }
+         */
+    var globalConf = Y.config['mt-beacon'] || {},
+        // 错误日志, felog
+        BEACON_TYPE_ERR = 1,
+        // pageview, blog
+        BEACON_TYPE_PV = 2,
+        // 事件, eventLog
+        BEACON_TYPE_EVENT = 3,
+        // 事件, eventLog 通过localStorage发送
+        BEACON_TYPE_LOCALEVENT = 5,
+        // 异步加载的模块，asyncLog
+        BEACON_TYPE_ASYNC = 4;
+
+    var XSStorage = Y.mt.XSStorage,
+        EVENT_LOCALSTORAGE_SPLIT = 'FORCHROME',
+        EVENT_LOCALSTORAGE_KEY = 'eventlist',
+        // 非 ie 浏览器，支持跨域的 localStorage
+        useLocalStorage = !Y.UA.ie && XSStorage.isSupportXSStorage,
+        localstorageLogSendTimer = null;
+
+    // 用于存储创建的beacon图片对象
+    var beaconCache = (YUI.Env.beacon = YUI.Env.beacon || {});
+
+    var mbqName = globalConf.mbq || '_mbq',
+        mbqMethods = {},
+        win = Y.config.win;
+
+    /**
+     * 请求图片，发走数据
+     * @class beacon
+     * @namespace mt
+     * @static
+     */
+    var Beacon = {
+        /*
+         * Beacon 中对 window 中 _mbq 的引用
+         */
+        mbq: null,
+        /**
+         * 向 _mbq 里添加可以使用的方法，添加完后将会便利 queue 里可以执行的数据
+         * @method blog
+         * @static
+         * @param {Object} methods {methodName: method} 的对象
+         * @param {Object} [context]
+         */
+        addBeaconMethods: function (methods, context) {
+            Y.Object.each(methods, function (method, methodName) {
+                if (context) {
+                    method = Y.bind(method, context);
+                }
+
+                mbqMethods[methodName] = method;
+            });
+
+            // 更新 queue 里面现在能被发送的东西
+            var q = win[mbqName] && win[mbqName]._q,
+                args,
+                cur = 0;
+
+            if (!q) {
+                return;
+            }
+
+            while (cur !== q.length) {
+                args = q[cur];
+                if (executeBeaconMethod(args)) {
+                    q.splice(cur, 1);
+                } else {
+                    cur++;
+                }
+            }
+        },
+
+        getBeaconMethods: function() {
+          return mbqMethods;
+        },
+        /**
+         * 跟踪PV，向blog发送日志
+         * @method blog
+         * @static
+         * @param {Object} [data] 其它内容
+         * @param {Object} [data.url=window.location.pathname] 页面标识，必须。
+         */
+        blog: function (data) {
+            var o = {};
+            if (data) {
+                Y.mix(o, data);
+            }
+            if (globalConf.blog && globalConf.blog.data) {
+                Y.mix(o, typeof globalConf.blog.data === 'function' ? globalConf.blog.data() : globalConf.blog.data);
+            }
+            // 补充url和domain两个字段
+            if (!o.url) {
+                o.url = this.getCurrentLocation().pathname;
+            }
+            if (!o.domain) {
+                o.domain = this.getCurrentLocation().host;
+            }
+            this.beacon(o, BEACON_TYPE_PV);
+        },
+        /**
+         * 异步加载模块后，向asyncLoag发送日志
+         * @method asynclog
+         * @param {Object} [data.url=window.location.pathname] 页面标识，必须。
+         */
+        asynclog: function (data) {
+            if (!data) return;
+            var o = {};
+            Y.mix(o, data);
+            if (globalConf.asynclog && globalConf.asynclog.data) {
+                Y.mix(o, typeof globalConf.asynclog.data === 'function' ? globalConf.asynclog.data() : globalConf.asynclog.data);
+            }
+            // 补充url和domain两个字段
+            if (!o.url) {
+                o.url = this.getCurrentLocation().pathname;
+            }
+            if (!o.domain) {
+                o.domain = this.getCurrentLocation().host;
+            }
+            this.beacon(o, BEACON_TYPE_ASYNC);
+        },
+        /**
+         * 跟踪事件，向eventLog发送日志
+         * @method eventlog
+         * @static
+         * @param {String} category
+         * @param {String} action
+         * @param {String} label
+         * @param {Object} extra
+         */
+        eventlog: function (category, action, label, extra) {
+            var o = {
+                ca: category,
+                ac: action,
+                la: label
+            };
+            if (extra) {
+                Y.mix(o, extra);
+            }
+            o.url = o.url || this.getCurrentLocation().href;
+            this.beacon(o, BEACON_TYPE_EVENT);
+        },
+        localEventlog: function (category, action, label, extra) {
+            var o = {
+                ca: category,
+                ac: action,
+                la: label
+            };
+            if (extra) {
+                Y.mix(o, extra);
+            }
+            o.url = o.url || this.getCurrentLocation().href;
+            this.beacon(o, BEACON_TYPE_LOCALEVENT);
+        },
+        /**
+         * 收集js错误日志
+         * @method errorlog
+         * @static
+         * @param {String} [level=fatal] 错误等级，分为'fatal','error','warn','info'
+         * @param {String} msg 错误信息
+         * @param {Object} [extra] 其它内容
+         */
+        errorlog: function (level, msg, extra) {
+            var o = {
+                type: 'jsdebug',
+                level: level || 'fatal',
+                msg: msg
+            };
+            if (extra) {
+                Y.mix(o, extra);
+            }
+            if (globalConf.errorlog && globalConf.errorlog.data) {
+                Y.mix(o, typeof globalConf.errorlog.data === 'function' ? globalConf.errorlog.data() : globalConf.errorlog.data);
+            }
+            this.beacon(o, BEACON_TYPE_ERR);
+        },
+        /**
+         * 向js日志收集服务器发送beacon请求，占用key：time:时间
+         * @method beacon
+         * @static
+         * @param {Object} o
+         * @param {Number} type
+         */
+        beacon: function (o, type) {
+            this._postconfig(o);
+            this._send(o, type);
+        },
+
+        _postconfig: function(o) {
+            if (globalConf.data) {
+                Y.mix(o, typeof globalConf.data === 'function' ? globalConf.data() : globalConf.data);
+            }
+
+            // 补充time和referrer两个字段
+            if (!o.time) {
+                o.time = Y.Lang.now();
+            }
+            if (!o.r && Y.config.doc.referrer) {
+                o.r = Y.config.doc.referrer;
+            }
+        },
+
+        _send: function(o, type) {
+            var domainHost = globalConf.domainHost || this.getCurrentLocation().hostname,
+                cdnDomainHost = globalConf.cdnDomainHost || this.getCurrentLocation().hostname,
+
+                ts = Y.Lang.now(),
+                b = beaconCache[ts] = this._createImage(),
+                protocol = this.getCurrentLocation().protocol,
+                uri;
+
+            switch (type) {
+                case BEACON_TYPE_ERR:
+                    // 错误日志
+                    uri = protocol === 'https:' ? protocol + '//felog.' + domainHost + '/_.gif'
+                        : protocol + '//fe.' + cdnDomainHost + '/_.gif';
+                    break;
+                case BEACON_TYPE_PV:
+                    // 追踪PV
+                    uri = protocol + '//b.' + domainHost + '/_.gif';
+                    break;
+                case BEACON_TYPE_EVENT:
+                    // 追踪事件
+                    uri = protocol + '//b.' + domainHost + '/_mt.gif';
+                    break;
+                case BEACON_TYPE_LOCALEVENT:
+                    uri = protocol + '//b.' + domainHost + '/_mt.gif';
+                    // 如果有localStorage的话，追踪事件放入localstorage中等待下次发送，解决chrome下取消发送的问题
+                    if (useLocalStorage) {
+                        var fullUri = uri + '?' + Y.QueryString.stringify(o);
+
+                        if (localstorageLogSendTimer) {
+                            clearTimeout(localstorageLogSendTimer);
+                        }
+
+                        var xsstorage = XSStorage.getInstance();
+                        xsstorage.appendItem(EVENT_LOCALSTORAGE_KEY, EVENT_LOCALSTORAGE_SPLIT + fullUri);
+
+                        localstorageLogSendTimer = setTimeout(function () {
+                            sendLocalStorageLog();
+                            localstorageLogSendTimer = null;
+                        }, 1000);
+                        return;
+                    }
+                    break;
+                case BEACON_TYPE_ASYNC:
+                    uri = protocol + '//b.' + domainHost + '/_async.gif';
+                    break;
+                default:
+                    break;
+            }
+
+            if (uri) {
+                b.src = uri + '?' + Y.QueryString.stringify(o);
+            }
+        },
+
+        _createImage: function() {
+            return new Image();
+        },
+
+        getCache: function() {
+            return beaconCache;
+        },
+
+        /**
+         * 每次都获取当前域下的locaition，防止切换domain之后IE8禁止获取原域下的location成员变量
+         */
+        getCurrentLocation: function () {
+            return Y.getLocation();
+        }
+    };
+
+    Y.namespace('mt.beacon');
+    Y.mt.beacon = Beacon;
+
+    // 覆盖 _mbq 函数，并将 Beacon 上添加对其的引用
+    (function () {
+        var q = win[mbqName] && win[mbqName]._q || [];
+
+        /**
+         * mt-beacon 加载后替换原来 window 上的 mbq 接口函数
+         * @param {String} methodName 需要执行的 Beacon 上的方法名，该方法可以暂时不存在，如果有则执行，
+         *      如果没有，则 push 到 queue 中
+         * @param args* 执行上述方法需要的参数
+         */
+        win[mbqName] = Beacon.mbq = function () {
+            var q = win[mbqName]._q;
+
+            if (!executeBeaconMethod(arguments)) {
+                q.push(arguments);
+            }
+        };
+
+        // restore and iterate queue to execute exists methods
+        win[mbqName]._q = q;
+
+        Beacon.addBeaconMethods({
+            blog: Beacon.blog,
+            eventlog: Beacon.eventlog,
+            localEventlog: Beacon.localEventlog,
+            asynclog: Beacon.asynclog,
+            errorlog: Beacon.errorlog
+        }, Beacon);
+    })();
+
+    /**
+     * 执行通过 mbq 接口传过来的参数，如果 Beacon 上有参数中的方法执行
+     * @param {Array|ArrayLike} args 第一个元素为方法名，后续为该方法需要的参数
+     * @return {Boolean} Beacon 上有该方法并执行成功返回 true，否则返回 false
+     */
+    function executeBeaconMethod(args) {
+        var methodName = args[0],
+            method = mbqMethods[methodName];
+        if (Y.Lang.isFunction(method)) {
+            method.apply(null, Array.prototype.slice.call(args, 1));
+            return true;
+        }
+
+        return false;
+    }
+
+    if (useLocalStorage) {
+        sendLocalStorageLog();
+    }
+
+    function sendLocalStorageLog() {
+        var xsstorage = XSStorage.getInstance();
+        xsstorage.getAndRemove(EVENT_LOCALSTORAGE_KEY, function (eventlist) {
+            var i, eventlog, b;
+
+            if (!eventlist) {
+                return;
+            }
+
+            eventlist = eventlist.split(EVENT_LOCALSTORAGE_SPLIT);
+            eventlist.shift();
+
+            for (i = 0; (eventlog = eventlist.pop()); i++) {
+                b = beaconCache[i] = Beacon._createImage();
+                b.src = eventlog;
+            }
+        });
+    }
+},
+'1.0.0',
+{
+    requires: [
+        'querystring-stringify-simple',
+        'mt-base',
+        'mt-xsstorage'
+    ]
+});
+
+;/*jshint white:true, unused:true*/
+/**
+ * pageview相关日志发送机制。
+ * @module mt-log
+ */
+M.add('mt-log', function (Y) {
+    var globalConf = Y.config['mt-log'] || {},
+        throttle = Y.throttle,
+        Beacon = Y.mt.beacon,
+        _mbq = Beacon.mbq;
+
+    var error = (function () {
+        var lastSign,
+            count = 0,
+            maxCount = 10,
+            delay = 500;
+
+        var errors = {};
+
+        return function (level, msg, extra) {
+            if (globalConf.error && globalConf.error.disable) return;
+
+            var sign = level + msg;
+            var errorlog = errors[sign];
+            if (!errorlog) {
+                errorlog = function () {
+                    count = lastSign === sign ? count : 0; // reset count if call is not continous
+                    lastSign = sign;
+                    if (count++ >= maxCount) return;
+                    _mbq('errorlog', level, msg, extra);
+                };
+                errors[sign] = throttle(errorlog, delay);
+            }
+            errorlog();
+        };
+    })();
+
+    /**
+     * 收集blog等数据，调用beacon机制发走
+     * @class log
+     * @namespace mt
+     * @static
+     */
+    var MtLog = {
+        /**
+         * 发送blog日志。一次页面访问只能调用一次本函数
+         * @method pageview
+         * @static
+         * @param {Object} config 设置需要发往blog的内容
+         * @param {Boolean} [config.hasGA=true] 是否有GA
+         * @param {Object} [config.extra={}] 指定需要额外发送的参数。
+         *
+         */
+        pageview: function (config) {
+            var self = this,
+                // 对blog的发送时机做一定的延时，保证能收集到loadend之类的数据
+                DELAY_FOR_DATA = 200,
+
+                CHECK_GALOAD_TIMEOUT = 100,
+                CHECK_GALOAD_EXPIRE = 15000,
+                GA_EXPIRE = 1,      // GA超时
+                PAGE_UNLOAD = 2,    // 关闭页面
+
+                delay = 0,
+                isSend = false;
+
+            Y.config.win.setTimeout(function () {
+                config = config || {};
+                // 调用时要发走的数据
+                var o = {};
+                Y.mix(o, config.extra);
+                Y.mix(o, self._getNavigationTiming());
+
+                // 配置中指定的要发走的数据
+                if (globalConf.pageview && globalConf.pageview.data) {
+                    Y.mix(o, typeof globalConf.pageview.data === 'function' ? globalConf.pageview.data() : globalConf.pageview.data);
+                }
+                self.pageviewData = o;
+
+                // 默认会检查GA是否有加载
+                if (config.hasGA === false) {
+                    beacon();
+                } else {
+                    checkGALoadStatus();
+                }
+
+                // 在指定期限内GA、page未load且需关闭时，发送beacon请求
+                Y.one(Y.config.win).on('beforeunload', function () {
+                    beacon(PAGE_UNLOAD);
+                });
+            }, DELAY_FOR_DATA);
+
+            // 检查GA、page加载情况
+            function checkGALoadStatus() {
+                if (Y.config.win._gat && Y.config.win._gat._getTracker) {
+                    // GA load
+                    beacon();
+                } else if (delay > CHECK_GALOAD_EXPIRE) {
+                    // 超出最大GA加载时间
+                    beacon(GA_EXPIRE);
+                } else {
+                    Y.config.win.setTimeout(function () {
+                        checkGALoadStatus();
+                    }, CHECK_GALOAD_TIMEOUT);
+                    delay += CHECK_GALOAD_TIMEOUT;
+                }
+            }
+
+            // 发送beacon请求
+            function beacon(expire) {
+                if (isSend) return;
+                self.pageviewData.expire = expire || 0;
+                _mbq('blog', self.pageviewData);
+                isSend = true;
+
+                self._isblogdone = true;
+                logmoduleview();
+            }
+
+        },
+        /**
+         * 异步加载模块后，向asyncLoag发送日志。
+         * 如果模块一开始是通过blog收集数据的，改成异步加载后，由于其加载时间可能在blog发送之后，需要使用该函数往asynclog发送数据。
+         * 模块名称对应的字段为pm
+         * @method moduleview
+         * @param {Object} data 模块数据
+         */
+        moduleview: function (data) {
+            if (!data || !data.pm) return;
+            var o = {};
+            Y.mix(o, data);
+            // 配置中指定的要发走的数据
+            if (globalConf.moduleview && globalConf.moduleview.data) {
+                Y.mix(o, typeof globalConf.moduleview.data === 'function' ? globalConf.moduleview.data() : globalConf.moduleview.data);
+            }
+            logmoduleview(o);
+        },
+        /**
+         * 收集js错误日志
+         * @method error
+         * @static
+         * @param {String} [level=fatal] 错误等级，分为'fatal','error','warn','info'
+         * @param {String} msg 错误信息
+         * @param {Object} [extra] 其它内容
+         */
+        error: error,
+
+        _getNavigationTiming: function () {
+            if (typeof [].map !== 'function') {
+                return {};
+            }
+
+            var DATA_KEYS = [
+                'navigationStart',
+                'unloadEventStart',
+                'unloadEventEnd',
+                'redirectStart',
+                'redirectEnd',
+                'fetchStart',
+                'domainLookupStart',
+                'domainLookupEnd',
+                'connectStart',
+                'connectEnd',
+                'secureConnectionStart',
+                'requestStart',
+                'responseStart',
+                'responseEnd',
+                'domLoading',
+                'domInteractive',
+                'domContentLoadedEventStart',
+                'domContentLoadedEventEnd',
+                'domComplete',
+                'loadEventStart',
+                'loadEventEnd'
+            ];
+            var data = {},
+                perf = Y.config.win.performance;
+
+            if (!perf) return {};
+
+            getTimingData();
+            getNavigationData();
+
+            function getTimingData() {
+                var timing = perf.timing;
+                if (!timing || !timing.navigationStart) return;
+
+                var result = [];
+
+                result = DATA_KEYS
+                    .map(function (key) {
+                        return (+timing[key]) || -1;
+                    })
+                    .map(function (t) {
+                        t = t - timing.navigationStart;
+                        return t < 0 ? -1 : t;
+                    });
+                data['pt_start'] = timing.navigationStart;
+                data['pt_index'] = result.join(',');
+            }
+
+            function getNavigationData() {
+                var navigation = perf.navigation;
+                if (!navigation) return;
+
+                data['pn_redirect'] = navigation.redirectCount;
+                data['pn_type'] = navigation.type;
+            }
+
+            return data;
+        }
+    };
+
+    Y.namespace('mt.log');
+    Y.mt.log = MtLog;
+
+    Beacon.addBeaconMethods({
+        trackPageview: MtLog.pageview,
+        trackModuleview: MtLog.moduleview,
+        logJsError: MtLog.error
+    }, MtLog);
+
+    if (!Y.config.debug) {
+        // 覆盖已有的onerror
+        Y.config.win.onerror = function (msg, url, line) {
+            MtLog.error('fatal', msg, { src: 'window', url: url || Y.getLocation().href, line: line });
+            return true;
+        };
+    }
+
+    /**
+     * 发送异步加载模块的数据。在blog发送完成前，数据会被缓存，当blog发送完成后再一起发走
+     * @method logmoduleview
+     * @param {Object} data 模块数据
+     */
+    function logmoduleview(data) {
+        var i, modules;
+        modules = MtLog._modules = MtLog._modules || [];
+        if (data) {
+            modules.push(data);
+        }
+        if (!MtLog._isblogdone) return;
+
+        for (i = modules.length - 1; i >= 0; i--) {
+            _mbq('asynclog', Y.mix(modules[i], MtLog.pageviewData));
+        }
+        MtLog._modules = [];
+    }
+},
+'1.0.0',
+{
+    requires: [
+        'node',
+        'yui-throttle',
+        'mt-beacon'
+    ]
+});
+
+;/*jshint white:true, unused:true*/
+/**
+ * 追踪系统
+ * @module mt-tracker
+ */
+M.add('mt-tracker', function (Y) {
+    var MT_EVENT = 'mtevent',
+        GA_EVENT = 'gaevent',
+        MT_MODULE = 'mod',
+        MT_MODULE_EXTRA = 'mod-extra',
+        D_MT_EVENT = 'data-' + MT_EVENT,
+        D_MT_MODULE = 'data-' + MT_MODULE;
+
+    var _mbq = Y.mt.beacon.mbq;
+
+    function decodeAttr(nd, attr) {
+        /*jshint evil:true*/
+        var str = nd.getAttribute(attr);
+        if (!str) return null;
+        try {
+            return eval('(' + str + ')');
+        } catch (ex) {
+            return null;
+        }
+    }
+
+    Y.namespace('mt.tracker');
+    /**
+     * 事件追踪，包括gaevent的跟踪，mtevent的跟踪，所有外链的跟踪
+     * @class tracker
+     * @namespace mt
+     * @static
+     */
+    Y.mt.tracker = {
+        /**
+         * 初始化事件自动跟踪
+         * 注意：如果是监听链接，注意不要使用stopEvent来停止默认事件，否则ga无法完成统计。
+         *       可以使用preventDefault或者javascript:void(0)。
+         * 1.自定义跟踪GA事件，标签需添加gaevent属性, 如<dt gaevent="Help|Open|/help/Newbie/PayToday">...</dt>
+         * 2.跟踪外链区分来源，a标签需添加galabel属性，如<a galabel="default" herf="http://kaixin001.com/...">...</a>
+         * @method init
+         * @static
+         * @example
+         * Y.mt.Tracker('gaevent', 'gaexternal', 'gaevent');
+         * 可选的参数如下
+         *     'mtevent',    // 跟踪自定义事件，具体可参见trackMTEvent
+         *     'gaevent',        // 跟踪自定义GA事件，具体可参见trackGACustomEvent
+         *     'gaexternal',      // 跟踪外链，具体可参见trackGAExternalLink
+         *
+         */
+        init: function () {
+            var config = {
+                mtevent: this.trackMTEvent,
+                gaevent: this.trackGACustomEvent,
+                gaexternal: this.trackGAExternalLink,
+                mtmodule: this.trackMTModule
+            };
+
+            Y.Array.each(arguments, function (type) {
+                config[type]();
+            });
+        },
+        /**
+         * 追踪模块点击事件
+         * @method trackMTModule
+         * @static
+         */
+        trackMTModule: function () {
+            var ndDoc = Y.one('body'),
+                ca = 'UserAction',
+                ac = 'Click',
+                la = 'module/click';
+
+            ndDoc.delegate('click', function (e) {
+                // 注意：一般情况下此处的ndTarget和this是不相等的
+                var ndTarget = e.target;
+                if (!ndTarget.hasClass("data-mod-enabled") && ndTarget.get('tagName').toLowerCase() !== 'a' && !ndTarget.ancestor('a')) return;
+
+                var moduleId = this.getAttribute(D_MT_MODULE);
+
+                // 新的moduleId由dp平台定义，长度不为2，此类模块不发送旧的点击和展现日志
+                if (moduleId && moduleId.length !== 2) {
+                    return;
+                }
+
+                var data = { pm: moduleId },
+                    ndLink = ndTarget.ancestor('a', true),
+                    modExtraData = ndLink && ndLink.getData(MT_MODULE_EXTRA);
+
+                if (modExtraData) {
+                    modExtraData = Y.JSON.parse(modExtraData);
+                    data = Y.mix(data, modExtraData);
+                }
+
+                _mbq('localEventlog', ca, ac, la, data);
+            }, '[' + D_MT_MODULE + ']');
+        },
+        /**
+         * 追踪节点事件
+         * @method trackMTEvent
+         * @static
+         */
+        trackMTEvent: function () {
+            var ndDoc = Y.one(document.body),
+                D_ATTR_DATA = 'data-mteventnd';
+
+            ndDoc.delegate('click', function () {
+                var data = decodeAttr(this, D_MT_EVENT),
+                    moreData = {},
+                    category, action, label;
+                if (!data) return;
+                this.ancestors('[' + D_ATTR_DATA + ']').each(function (nd) {
+                    // YUI中取得的nl是从上到下的
+                    Y.mix(moreData, decodeAttr(nd, D_ATTR_DATA), true);
+                });
+                if (typeof moreData.ca === 'undefined') moreData.ca = 'InnerLink';
+                if (typeof moreData.ac === 'undefined') moreData.ac = 'Click';
+                Y.mix(data, moreData);
+
+                category = data.ca;
+                action = data.ac;
+                label = data.la;
+                delete data.ca;
+                delete data.ac;
+                delete data.la;
+
+                _mbq('localEventlog', category, action, label, data);
+            }, '[' + D_MT_EVENT + ']');
+        },
+        /**
+         * 处理自定义GA事件
+         * @method trackGACustomEvent
+         * @static
+         */
+        trackGACustomEvent: function () {
+            var ndDoc = Y.one(document.body),
+                attrName = GA_EVENT;
+
+            ndDoc.delegate('click', function () {
+                var attr = this.getAttribute(attrName);
+                if (!attr) return;
+
+                var params = attr.split('|');
+                // 自动补齐Category, Action
+                if (params.length < 3) {
+                    params.unshift('InnerLink', 'Click');
+                }
+                if (!params[2] && this.get('href')) {
+                    params[2] = this.get('href').replace('http://', '');
+                }
+
+                if (_gaq) {
+                    _gaq.push(['_trackEvent'].concat(params));
+                }
+            }, '[' + attrName + ']');
+        },
+        /**
+         * 跟踪所有外链
+         * @method trackGAExternalLink
+         * @static
+         */
+        trackGAExternalLink: function () {
+            var ndDoc = Y.one(document.body);
+
+            ndDoc.delegate('click', function () {
+                var link = this.get('href'),
+                    reg = /^(http:\/\/|mailto:)/,
+                    index,
+                    label;
+
+                if (link && reg.test(link)) {
+                    link = link.replace('http://', '');
+                    index = link.indexOf('?');
+                    label = this.getAttribute('galabel');
+                    if (index > 0) {
+                        link = link.substring(0, index);
+                    }
+
+                    if (/\.(meituan|mt|sankuai)\.com/.test(link)) {
+                        // 跳过美团内部链接
+                        return;
+                    }
+
+                    if (label) {
+                        link += '#label=' + label;
+                    }
+
+                    if (_gaq) {
+                        _gaq.push(['_trackEvent', 'OutLink', 'Click', link]);
+                    }
+                }
+            }, 'a');
+        }
+    };
+},
+'1.0.0',
+{
+    requires: [
+        'node',
+        'event',
+        'mt-beacon'
+    ]
+});
+
+;/*jshint white:true, unused:true*/
+/**
+ * 主站推荐信息追踪系统
+ *
+ * @module www-acmtracker
+ */
+M.add('www-acmtracker', function (Y) {
+    var MAX_RECLS_LENGHT = 1400;
+
+    var ACMTracker = {
+        /**
+         * 发送推荐信息的展现量，发走形如 'acm1,acm2,' 的数据，由asynclog发送
+         * 如果要发送的数据太长的话，会将日志拆分为多条发送
+         * @method sendView
+         * @param {Array|String} infoList acm 字符串的数组，或者'，'相隔的字符串
+         * @static
+         */
+        sendView: function (infoList) {
+            if (!infoList || !infoList.length) {
+                return;
+            }
+
+            var resultList;
+
+            resultList = [];
+            if (Y.Lang.isString(infoList)) {
+                infoList = infoList.split(',');
+            }
+
+            Y.Array.each(infoList, function (acm) {
+                if (acm) {
+                    resultList.push(acm);
+                }
+            });
+
+            sendView(resultList);
+        },
+        /**
+         * 发送推荐信息的点击信息，发出带有 reccacm 字段的 eventlog
+         * @param {String} acm 被点击元素的 acm
+         */
+        sendClick: function (acm) {
+            window._mbq('localEventlog', 'UserAction', 'Click', 'rec/hit', {
+                reccacm: acm
+            });
+        }
+    };
+
+    Y.mt.beacon.addBeaconMethods({
+        sendReclsView: ACMTracker.sendView,
+        sendReclsClick: ACMTracker.sendClick
+    }, ACMTracker);
+
+    function sendView(infoList) {
+        var recStr = '',
+            recStrArr = [],
+            data = {},
+            length = infoList.length;
+
+        Y.Array.each(infoList, function (info, i) {
+            recStr += info;
+            if (recStr.length > MAX_RECLS_LENGHT) {
+                recStrArr.push(recStr);
+                recStr = '';
+                return;
+            }
+
+            if (i !== length - 1) {
+                recStr += ',';
+            }
+        });
+
+        if (recStr) {
+            recStrArr.push(recStr);
+        }
+
+        if (!recStrArr.length) {
+            return;
+        }
+
+        Y.Array.each(recStrArr, function (recStr) {
+            data.recv = recStr;
+            window._mbq('asynclog', data);
+        });
+    }
+
+},
+// version
+'1.0.0',
+
+// dependency
+{
+    requires: [
+        'www-base',
+        'mt-beacon'
+    ]
+});
+;

@@ -1,0 +1,248 @@
+/*jshint white:true*/
+/*global M:true*/
+
+/**
+ * Description
+ * @module mt-scrollloader
+ */
+M.add('mt-scrollloader', function(Y){
+    var $IO = Y.io;
+    var $Util = Y.mt.util;
+    var w = M.window;
+
+    Y.namespace('mt.scrollloader');
+    /**
+     * 滚动延迟加载, 默认对DealList进行处理.
+     * @param {Selector|Node} nd 容器
+     * @param {Object} config
+     * @param {Boolean} [config.loadOneShotImmediately=false] 是否立即请求，不管滚动位置
+     * @class ScrollLoader
+     * @namespace Y.mt
+     */
+    function ScrollLoader(nd, config) {
+        config = config || {};
+        var ndContainer = Y.one(nd),
+            attrConf;
+        if (!ndContainer) return;
+
+        this.ndContainer = ndContainer;
+
+        // 处理节点特有配置
+        // 在www-base的init里面会对所有页面执行一次本init函数
+        // 如果某些页面需要特殊的配置，可在节点上写好以覆盖
+        attrConf = ndContainer.getAttribute('data-async-params');
+        if (attrConf) {
+            attrConf = $Util.decodeJSON(attrConf);
+            if (attrConf) {
+                Y.mix(config, attrConf, true);
+            }
+        }
+        // 处理传给后端的offset
+        if ((+config.initialLoad)) {
+            config.offset = +config.initialLoad;
+        }
+
+        // 默认配置
+        // 确保为整数，且不为NaN
+        if (config.loadThreshold) config.loadThreshold = +config.loadThreshold || 0;
+        if (config.initialLoad) config.initialLoad = +config.initialLoad || 0;
+        if (config.limit) config.limit = +config.limit || 0;
+
+        Y.Array.each([
+            'start',
+            'beforeLoad',
+            'beforeRequest',
+            'beforeContentReady',
+            'contentReady',
+            'stop'
+        ], function(fn) {
+            this.publish(fn, {
+                emitFacade: true,
+                defaultFn: this[fn]
+            });
+        }, this);
+
+        if (config.on) {
+            this.on(config.on);
+            delete config.on;
+        }
+
+        this.conf = Y.merge(ScrollLoader.DEFAULT_CONF, config);
+    }
+
+    ScrollLoader.DEFAULT_CONF = {
+        action: '/index/deallist',
+        // 每次请求的deal数
+        limit: 36,
+        // 从dealids中什么位置开始加载单子
+        initialLoad: 0,
+        // 距离视口顶部几屏高度的距离时开始发异步请求
+        loadThreshold: 2,
+        // 是否不使用loading效果（“加载中”效果）
+        disableLoadingEffect: false,
+        // 回调执行最大频率（帧/秒）
+        minInterval: 6,
+        // 已有几次异步请求
+        seqNo: 0,
+        // 下次请求deal列表的起始偏移量
+        offset: 0
+    };
+
+    /**
+     * 绑定deal异步请求事件
+     * @method run
+     */
+    ScrollLoader.prototype.run = function () {
+        if (this.stopped) return;
+        var self = this;
+
+        if (this.conf.loadOneShotImmediately) {
+            this.load();
+        }
+
+        this.fire('start');
+        this.check();
+
+        // 绑定触发异步加载的事件
+        this.resizeHandle = w.resize(function () {
+            self.check();
+        }, this.minInterval);
+        this.scrollHandle = w.scroll(function () {
+            self.check();
+        }, this.minInterval);
+    };
+
+    /**
+     * 检查是否需要发起deal异步请求
+     * @method check
+     *
+     */
+    ScrollLoader.prototype.check = function () {
+        if (this.isLocked) return;
+
+        var docScrollY = w.get('pageYOffset'),
+            winHeight = w.get('innerHeight'),
+            top = this.ndContainer.getY(),
+            height = this.ndContainer.get('offsetHeight'),
+            threshold = winHeight * this.conf.loadThreshold;
+
+        if (top + height - docScrollY < threshold) {
+            this.load();
+        }
+    };
+
+    /**
+     * 发起deal异步请求
+     * @method load
+     */
+    ScrollLoader.prototype.load = function () {
+        var self = this,
+            timeStart,
+            data;
+        if (this.isLocked) return;
+        this.isLocked = true;
+
+        this.fire('beforeLoad');
+        if (this.stopped) {
+            return;
+        }
+        data = this.data;
+
+        this.seqNo++;
+        this.fire('beforeRequest');
+
+        timeStart = Date.now();
+        $IO(this.conf.action, {
+            method: 'post',
+            data: data,
+            on: {
+                success: function (id, o) {
+                    var res = $Util.getEvalRes(o);
+                    // 首先判断是否是机器人访问，然后再进行正常流程
+                    if (res.isMachine && typeof self.conf.callback === 'function') {
+                        // 执行回调
+                        self.conf.callback(res.data);
+                    } else if (res.status && res.data) {
+                        self.fire('beforeContentReady', res, {
+                            reqStart: timeStart
+                        });
+                        self.ndContainer.append(res.data);
+                        self.fire('contentReady');
+                        self.isLocked = false;
+                    } else {
+                        self.fire('stop');
+                    }
+                },
+                failure: function () {
+                    self.fire('stop');
+                }
+            }
+        });
+    };
+
+    /**
+     * 加载开始时的处理
+     */
+    ScrollLoader.prototype.start = function() {  };
+
+    /**
+     * Load方法调用前
+     */
+    ScrollLoader.prototype.beforeLoad = function() { };
+
+    /**
+     * 在发异步请求前执行的回调，执行环境为初始化时生成的配置对象
+     * @method beforeRequest
+     *
+     */
+    ScrollLoader.prototype.beforeRequest = function () {
+        var ndContainer = this.ndContainer,
+            ndLoading = this.ndLoading;
+
+        if (this.conf.disableLoadingEffect) return;
+
+        if (ndLoading) {
+            ndLoading.show();
+        } else {
+            this.ndLoading = Y.Node.create('<div class="deals-async-loading"><div class="deals-async-loading__tips"><i></i>加载中</div></div>');
+            ndContainer.insert(this.ndLoading, 'after');
+        }
+    };
+
+    /**
+     * 请求返回，插入内容前
+     * @method beforeContentReady
+     * @param {Object} [extra] 额外添加的数据
+     * @param {Object} [extra.res] 异步请求返回的数据（已解析成对象）
+     * @param {Number} [extra.reqStart] 异步请求前时刻的时间戳
+     *
+     */
+    ScrollLoader.prototype.beforeContentReady = function (response, extra) { };
+
+    /**
+     * 插入内容后
+     * @method contentReady
+     */
+    ScrollLoader.prototype.contentReady = function () { };
+
+    /**
+     * 加载终止时的处理
+     * @method stop
+     */
+    ScrollLoader.prototype.stop = function () {
+        if (this.resizeHandle) this.resizeHandle.detach();
+        if (this.scrollHandle) this.scrollHandle.detach();
+        if (this.ndLoading) this.ndLoading.hide();
+        this.stopped = true;
+    };
+
+
+    Y.augment(ScrollLoader, Y.EventTarget);
+    Y.mt.ScrollLoader = ScrollLoader;
+
+}, '1.0.0', { requires: [
+    'io-base',
+    'mt-base'
+] });
+
+;

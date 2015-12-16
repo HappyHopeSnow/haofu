@@ -1,0 +1,287 @@
+/*jshint white:true,unused:true*/
+/**
+ * 选项卡
+ * @module uix-tabview
+ */
+M.add('uix-tabview', function (Y) {
+    /**
+     * 提供简单的选项卡功能
+     * @param {Node|Selector} ndContainer 容器
+     * @param {Object} config 参数
+     * @param {Selector} config.trigger 选项卡触发器
+     * @param {Selector} config.sheet 选项卡内容
+     * @param {String} config.activeClass 选项卡选中内容对应的trigger添加的类
+     * @example
+        <div data-uix="tabview" data-params="{trigger:'.tabview__trigger', sheet:'.tabview__sheet', activeClass:'tabview__trigger--active'}">
+            <ul>
+                <li class="tabview__trigger">trigger1</li>
+                <li class="tabview__trigger">trigger2</li>
+            </ul>
+            <div class="tabview__sheet">sheet1</div>
+            <div class="tabview__sheet">sheet2</div>
+        </div>
+     */
+    function Tabview(ndContainer, config) {
+        ndContainer = Y.one(ndContainer);
+        if (!ndContainer) return;
+
+        var defaultConfig = {
+            trigger: '.tabview__trigger',
+            sheet: '.tabview__sheet',
+            activeClass: 'current'
+        };
+
+        config = Y.mix(config || {}, defaultConfig);
+
+        ndContainer.delegate('click', function () {
+            var nlTrigger = ndContainer.all(config.trigger),
+                nlSheet = ndContainer.all(config.sheet);
+            if (!nlTrigger.size() || nlTrigger.size() !== nlSheet.size()) return;
+
+            var index = nlTrigger.indexOf(this);
+            nlTrigger.removeClass(config.activeClass);
+            nlTrigger.item(index).addClass(config.activeClass);
+            nlSheet.hide();
+            nlSheet.item(index).show();
+            if (Y.UA.ie === 6) {
+                Y.mt.util.reflow();
+            }
+        }, config.trigger);
+    }
+
+    Y.namespace('mt.uix');
+    Y.mt.uix.Tabview = Tabview;
+
+}, '1.0.0', { requires: ['mt-base', 'node']});
+
+
+;/*jshint white:true, unused:true*/
+M.add('holy-reco', function (Y) {
+    Y.mt.ComponentHub.attach('holy-reco', function () {
+        Y.mt.uix.Tabview(this, { trigger: '.J-holy-reco__label', sheet: '.J-holy-reco__content' });
+    });
+}, '1.0.0', {
+    requires: ['www-base', 'uix-tabview']
+});
+;/*jshint white:true, unused:true*/
+M.add('rightbottom-sticky', function (Y) {
+    var $Www = Y.mt.www,
+        $Util = Y.mt.util,
+        Dialog = Y.mt.Dialog,
+        $IO = Y.io;
+    $Www.RightbottomSticky = {
+        //初始化右下角fixbar 代码
+        init: function(e) {
+            var container,
+                nNode;
+            container = e.component.node; // 获取组件的根节点。
+            if(!container) return;
+            nNode = container.one('#fixbar-container');
+            if(!nNode) return;
+            var config = $Util.decodeJSON(nNode.getData('config')) || {};
+            Y.mix(config, {
+                topConfig: {},
+                voteConfig: {},
+                helpConfig: {},
+                feedbackConfig: {},
+                containerConfig: {}
+            });
+            initFixbarContainer(nNode, config.containerConfig); //初始化container
+            initGotop(config.topConfig); //初始化 "回到顶部"
+            initVote(config.voteConfig); //初始化 "问卷调查"
+            initHelp(config.helpConfig); //初始化 "帮助中心"
+            initFeedback(config.feedbackConfig); //初始化 "意见反馈"
+
+            function initFixbarContainer(nNode, config) {
+                if(!nNode) return;
+                config = config || {};
+                Y.mix(config, {
+                    mainAreaWidth: 980,
+                    bottomEdge: '.site-info-w',
+                    bottomOffset: 20
+                });
+
+                Y.use('uix-sticky', function (Y) {
+                    new Y.mt.uix.Sticky(nNode, {
+                        canDisappear: true,
+                        mainAreaWidth: config.mainAreaWidth,
+                        bottomEdge: config.bottomEdge,
+                        hAlign: 'right',
+                        vAlign: 'bottom',
+                        vBottomOffset: config.bottomOffset
+                    });
+                });
+            }//endof fixbar
+
+            function initGotop(config) {
+                var nNode = container.one('#fixbar-item-top');
+                if(!nNode) return;
+                config = config || {};
+                Y.mix(config, {
+                    maxAreaWidth: 980,
+                    bottomEdge: '.site-info-w',
+                    content: '',
+                    minScrollTop: 140,
+                    bottomOffset: 20
+                });
+                Y.use('uix-smoothscroll', 'uix-sticky', function (Y) {
+                    Y.mt.uix.Smoothscroll(nNode, { trigger: '.J-go-top' });
+                    new Y.mt.uix.Sticky(nNode, {
+                        canDisappear: true,
+                        mainAreaWidth: config.mainAreaWidth,
+                        bottomEdge: config.bottomEdge,
+                        hAlign: 'right',
+                        vAlign: 'bottom',
+                        vMinScrollTop: config.minScrollTop,
+                        vBottomOffset: config.bottomOffset
+                    });
+                });
+            } //endof initGootop
+
+            function initVote(config) {
+                var nNode = container.one('#fixbar-item-vote');
+                if(!nNode) return;
+                config = config || {};
+                if(config.hide) {
+                    nNode.hide();
+                    return;
+                }
+                Y.mix(config, {
+                    maxAreaWidth: 980,
+                    bottomOffset: 20,
+                    minScrollTop: 0,
+                    bottomEdge: '.site-info-w',
+                    ga: '',
+                    url: '/survey/82'
+                    });
+                
+                Y.use('uix-sticky', function (Y) {
+                    new Y.mt.uix.Sticky(nNode, {
+                        canDisappear: true,
+                        mainAreaWidth: config.mainAreaWidth,
+                        bottomEdge: config.bottomEdge,
+                        hAlign: 'right',
+                        vAlign: 'bottom',
+                        vMinScrollTop: config.minScrollTop,
+                        vBottomOffset: config.bottomOffset
+                    });
+                });
+            }//endof initVote
+
+            function initHelp(config) {
+                var nNode = container.one('#fixbar-item-help'),
+                    dialog;
+                if(!nNode) return;
+                config = config || {};
+                if(config.hide) {
+                    //客户端配置不允许显示该部分。
+                    nNode.hide();
+                    return;
+                }
+                Y.mix(config, {
+                    mainAreaWidth: 980,
+                    bottomOffset: 20,
+                    minScrollTop: 0,
+                    bottomEdge: '.site-info-w'
+                    });
+                Y.use('uix-sticky', function (Y) {
+                    new Y.mt.uix.Sticky(container, {
+                        canDisappear: true,
+                        mainAreaWidth: config.mainAreaWidth,
+                        bottomEdge: config.bottomEdge,
+                        hAlign: 'right',
+                        vAlign: 'bottom',
+                        vMinScrollTop: config.minScrollTop,
+                        vBottomOffset: config.bottomOffset
+                    });
+                });
+                //点击事件延迟绑定
+                Y.one(document.body).delegate('click', function(e){
+                    e.preventDefault(); 
+                    if(!dialog) {
+                        dialog = $Www.RightbottomSticky.help(); 
+                    } else {
+                        dialog.open();
+                    }
+                }, '.J-lift-help');
+
+            }//endof initHelp
+
+            function initFeedback(config) {
+                var nNode = container.one('#fixbar-item-feedback'),
+                    content ;
+                if(!nNode) return;
+                config = config || {};
+                if(config.hide) {
+                    nNode.hide();
+                    return;
+                }
+                Y.mix(config, {
+                    mainAreaWidth: 980,
+                    bottomOffset: 20,
+                    minScrollTop: 0,
+                    ga: '',
+                    bottomEdge: '.site-info-w'
+                });
+                if(!config.url) return;
+                if(config.ga) {
+                    config.ga = 'gaevent="' + config.ga + '"'; 
+                }
+                content = '<a target="_blank" class="new-index-triffle lift-nav lift-nav--feedback" hidefocus="true"' + config.ga + ' href="' + config.url + '"><i></i><span>意见反馈</span></a>';
+                nNode.setHTML(content);
+                Y.use('uix-sticky', function (Y) {
+                    new Y.mt.uix.Sticky(nNode, {
+                        canDisappear: true,
+                        mainAreaWidth: config.mainAreaWidth,
+                        bottomEdge: config.bottomEdge,
+                        hAlign: 'right',
+                        vAlign: 'bottom',
+                        vMinScrollTop: config.minScrollTop,
+                        vBottomOffset: config.bottomOffset
+                    });
+                });
+            
+            }//endof initFeedback
+        }, //end of init
+
+        /**
+         * 帮助中心部分初始化
+         * @method help
+         */
+        help: function() {
+            var helpDialog,
+                ndDialog,
+                HELP_DIALOD_ID = "help-center-dialog";
+
+            helpDialog = new Dialog({
+                id: HELP_DIALOD_ID,
+                title: '帮助中心',
+                width: '681px',
+                content: '<div class="loading-jump--large" style="height:365px;"></div>'
+            });
+            helpDialog.open();
+            ndDialog = Y.one('#' + HELP_DIALOD_ID);
+            $IO('/help/center', {
+                method: 'POST',
+                on: {
+                    success: function (id, o) {
+                        var res = $Util.getEvalRes(o);
+                        helpDialog.set('content', res.content);
+                        ndDialog.one('.body').setStyle('height', '365px');
+                        helpDialog.set('centered', true);
+                    }
+                }
+            });
+            return helpDialog;
+        }            
+    
+    }; //end of RightbottomSticky
+
+    Y.mt.ComponentHub.attach('rightbottom-sticky', function (e) {
+        // activiate component
+        $Www.RightbottomSticky.init(e);
+    });
+}, '1.0.0', {
+    requires: ['mt-base', 'mt-dialog']
+});
+;

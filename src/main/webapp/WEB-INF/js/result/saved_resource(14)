@@ -1,0 +1,388 @@
+/*jshint white:true,unused:true*/
+/**
+ * 悬浮效果插件，使节点按照指定的规则在滚动时不改变位置
+ * 主要的代码和逻辑来自w-fixedbar,但不依赖widget
+ * @module uix-sticky
+ */
+M.add('uix-sticky', function (Y) {
+    var $Util = Y.mt.util,
+        isIE6 = (Y.UA.ie === 6),
+        PX = 'px';
+
+    /**
+     * @class Sticky
+     * @namespace mt.uix
+     * @constructor
+     */
+    function Sticky(ndHost, config) {
+        var defaultConfig = {
+            mainAreaWidth: 980,             // 主内容区域宽度
+            hideWhenTooNarrow: false,       // 页面太窄时是否隐藏
+            canDisappear: false,            // 是否可隐藏
+            hAlign: 'left',                 // 水平对齐方向, left | right
+            hLeftOffset: 10,                // 水平left偏移 hAlign = left 时使用
+            hRightOffset: 10,               // 水平right偏移 hAlign = right 时使用
+            vAlign: 'top',                  // 垂直参照方向, top | bottom
+            vTopOffset: 0,                  // 垂直方向上node与上边界偏移
+            vBottomOffset: 0,               // 垂直方向上node与下边界偏移
+            vMinScrollTop: 0,               // 至少滚动到多少像素才显示
+            topEdge: null,                  // 上边界
+            isStaticBottomEdge: false,      // 下边界是否是静态的
+            bottomEdge: '#ft',              // 下边界
+            side: 'right'                   // 相对于mainArea的位置,left | right
+        };
+
+        // 对topEdge进行额外处理
+        if (config.topEdge) {
+            if (Y.Lang.isNumber(config.topEdge) === false) {
+                var ndTopEdge = Y.one(config.topEdge);
+                if (ndTopEdge) {
+                    this._topEdgeNode = ndTopEdge;
+                    config.topEdge = ndTopEdge.getY();
+                }
+            }
+        }
+
+        this.ndHost = Y.one(ndHost);
+        this.config = Y.merge(defaultConfig, config);
+
+        if (!this.ndHost) {
+            throw new Error("Y.mt.uix.Sticky: 没有设置ndHost或ndHost不存在");
+        }
+
+        if (Y.Lang.isNumber(this.config.bottomEdge) && !this.config.isStaticBottomEdge) {
+            throw new Error("Y.mt.uix.Sticky: isStaticBottomEdge为false时，bottomEdge不能为数字");
+        }
+
+        var hostDismensions = Y.mt.UIUtil.getDimensions(ndHost);
+        this._hostHeight = hostDismensions.offsetHeight;
+        this._hostWidth = hostDismensions.offsetWidth;
+
+        this._topEdge = this.config.topEdge;
+        this._delta = 10;
+
+        // 设置初始显示状态
+        this.shouldShow = {
+            horizontal: true,
+            vertical  : true
+        };
+
+        this._handlers = {};
+        this._bindEvent();
+    }
+
+    Sticky.prototype = {
+        /**
+         * 绑定UI事件
+         * @method _bindEvent
+         */
+        _bindEvent: function () {
+            var instance = this;
+
+
+            instance._align();
+            instance._handleDisplay();
+
+            // 影响高度的组件初始化完毕和用户操作后，需触发的事件
+            Y.Global.on('PageHeight:change', function () {
+                window.setTimeout(function () {
+                    // 强制刷新bottomEdge缓存
+                    if (instance.config.isStaticBottomEdge) {
+                        instance._getBottomEdge(true);
+                    }
+                    handleScroll();
+                }, 50);
+            });
+
+            // 用户刷新当前页面，屏幕已经滚动到了之前位置，需要初始化
+            window.setTimeout(handleResize, 200);
+
+            /**
+            * deal详情页图片未加载完时，不占用height，在图片加载完成后footer的Y坐标会改变，校正以下
+            * 已知问题：在domready和onload之前的这段时间内footer的坐标还是不正确的。
+            **/
+            Y.mt.util.addLoadListener(function () {
+                instance._getBottomEdge(true);
+            });
+
+            var ndWin = Y.one(window);
+
+            // save handle for detach
+            this._handlers.scroll = ndWin.on('scroll', $Util.throttle(handleScroll));
+            this._handlers.resize = ndWin.on('resize', $Util.throttle(handleResize));
+
+            // 处理滚动
+            function handleScroll() {
+                if (instance._destroy) {
+                    return;
+                }
+                instance._handleDisplay();
+                instance._alignVertical();
+            }
+
+            // 处理窗口大小变化
+            function handleResize() {
+                if (instance._destroy) {
+                    return;
+                }
+                // 处理横向窗口resize
+                instance._handleDisplay();
+
+                // 处理纵向窗口resize
+                // resize会导致winHeight变化，进而导致top或者bottom属性的设置
+                //      这些属性是在_alignVertical中处理的
+                instance._alignVertical();
+
+                instance._alignHorizontal();
+            }
+        },
+
+        // host是否可见
+        isVisible: function () {
+            var instance = this;
+            return instance.shouldShow.vertical && instance.shouldShow.horizontal;
+        },
+
+        // 当纵向滚动距离不足时隐藏
+        _hideCanDisappear: function () {
+            if (!this.config.canDisappear) return;
+            var ndHost = this.ndHost;
+            var minScrollTop = this.config.vMinScrollTop;
+
+            var docScrollY = parseInt(ndHost.get('docScrollY'), 10);
+            this.shouldShow.vertical = docScrollY >= minScrollTop;
+        },
+
+        // 当横向距离不足时隐藏
+        _hideWhenNarrow: function () {
+            if (!this.config.hideWhenTooNarrow) return;
+
+            var hostWidth = this._hostWidth,
+                winWidth = Y.one(window).get('winWidth'),
+                config = this.config,
+                mainAreaWidth = parseInt(config.mainAreaWidth, 10),
+                hLeftOffset = parseInt(config.hLeftOffset, 10),
+                hRightOffset = parseInt(config.hRightOffset, 10),
+                offset;
+
+            offset = config.hAlign === 'right' ? hRightOffset : hLeftOffset;
+
+            // hide when window is smaller for Host + main area
+            this.shouldShow.horizontal = (winWidth - mainAreaWidth) / 2 >= hostWidth + offset;
+        },
+
+
+        // 根据横向和纵向的指标觉得是否隐藏
+        _handleDisplay: function () {
+            var ndHost = this.ndHost;
+            this._hideCanDisappear();
+            this._hideWhenNarrow();
+
+            if (this.isVisible()) {
+                ndHost.show();
+            } else {
+                ndHost.hide();
+            }
+        },
+        // 处理水平方向相关的属性
+        _alignHorizontal: function () {
+            // 如果节点是隐藏的， 则不作处理
+            if (!this.isVisible()) return;
+
+            var instance = this,
+                ndHost = instance.ndHost,
+                config = instance.config,
+                mainAreaWidth = parseInt(config.mainAreaWidth, 10),
+                hLeftOffset = parseInt(config.hLeftOffset, 10),
+                hRightOffset = parseInt(config.hRightOffset, 10),
+                ndWin = Y.one(window),
+                winWidth = ndWin.get('winWidth'),
+                hostWidth = instance._hostWidth;
+
+            if (config.side === 'right') {
+                if (config.hAlign === 'right') {
+                    ndHost.setStyle('right', config.hRightOffset + PX);
+                } else {
+                    // viewport宽度不足以完整展示host节点
+                    if ((winWidth - mainAreaWidth) / 2 < (hostWidth + hLeftOffset)) {
+                        ndHost.setStyle('left', (winWidth - hostWidth - hLeftOffset) + PX);
+                    } else {
+                        ndHost.setStyle('left', ((winWidth + mainAreaWidth) / 2 +  hLeftOffset) + PX);
+                    }
+                }
+            } else {
+                if (config.hAlign === 'left') {
+                    ndHost.setStyle('left', hLeftOffset + PX);
+                } else {
+                    if ((winWidth - mainAreaWidth) / 2 < hostWidth + hRightOffset) {
+                        ndHost.setStyle('right', (winWidth - hostWidth - hRightOffset) + PX);
+                    } else {
+                        ndHost.setStyle('right', ((winWidth + mainAreaWidth) / 2 + hRightOffset) + PX);
+                    }
+                }
+            }
+        },
+        // 处理垂直方向的对齐
+        _alignVertical: function () {
+        /*jshint maxcomplexity:16*/
+            // 如果节点是隐藏的， 则不作处理
+            if (!this.isVisible()) return;
+
+            var top,
+                bottom,
+                instance = this,
+                config = this.config,
+                ndHost = this.ndHost,
+                ndWin = Y.one(window),
+                winHeight = ndWin.get('winHeight'),
+                vBottomOffset = parseInt(config.vBottomOffset, 10),
+                vAlign = config.vAlign,
+                docScrollY = ndHost.get('docScrollY'),
+                bottomEdge = parseInt(instance._getBottomEdge(), 10),
+                topEdge = instance._topEdge,
+                ndTopEdge = instance._topEdgeNode,
+                delta = instance._delta,
+                hostStyleTop = instance._hostStyleTop,
+                hostHeight = instance._hostHeight;
+
+            if (ndTopEdge) {
+                topEdge = ndTopEdge.getY();
+            }
+
+            // 超出下限位置的高度
+            var exceedBottomEdge = docScrollY + winHeight - bottomEdge;
+
+            if (isIE6) {
+                if (vAlign === 'bottom') {
+                    top = (docScrollY + winHeight) - (vBottomOffset + hostHeight);
+                    if (topEdge && top < topEdge) {
+                        top = topEdge;
+                    } else if (exceedBottomEdge > 0) {
+                        top -= exceedBottomEdge;
+                    }
+                } else {
+                    top = docScrollY + hostStyleTop;
+                    if (bottomEdge && (hostHeight + top + vBottomOffset > bottomEdge)) {
+                        top = bottomEdge - hostHeight - vBottomOffset;
+                    } else if (topEdge && top < topEdge) {
+                        top = topEdge;
+                    } else if (exceedBottomEdge > 0 && (top + hostHeight > bottomEdge)) {
+                        top = bottomEdge - hostHeight - delta;
+                    }
+                }
+                ndHost.setStyle('top', top + PX);
+            } else {
+                if (vAlign === 'bottom') {
+                    // 常规情况
+                    bottom = vBottomOffset;
+
+                    // 当viewport区域不足够高时，要保证host不能跑到topEdge上面
+                    if (topEdge && (winHeight - (hostHeight + bottom)  < topEdge - docScrollY)) {
+                        bottom = winHeight - (topEdge - docScrollY) - hostHeight;
+                    } else if (exceedBottomEdge > 0) { // 处理下边界
+                        bottom += exceedBottomEdge;
+                    }
+
+                    ndHost.setStyle('bottom', bottom + PX);
+                } else {
+                    top = hostStyleTop;
+                    // vAlign = top && winHeight < vTopOffset + vBottomOffset + hostHeight
+                    // 并且滚动到bottomEdge时的边界情况
+                    if (bottomEdge && (docScrollY + hostHeight + top + vBottomOffset > bottomEdge)) {
+                        top = bottomEdge - docScrollY - hostHeight - vBottomOffset;
+                    } else if (topEdge && docScrollY + top < topEdge) {
+                        top = topEdge - docScrollY;
+                    } else if (exceedBottomEdge > 0 && (docScrollY + top + hostHeight > bottomEdge)) {
+                        top = bottomEdge - docScrollY - hostHeight - delta;
+                    }
+
+                    ndHost.setStyle('top', top + PX);
+                }
+            }
+        },
+        _align: function() {
+            var instance = this,
+                config = instance.config,
+                delta = instance._delta,
+                vTopOffset = parseInt(config.vTopOffset, 10),
+                hostStyleTop = vTopOffset,
+                ndWin = Y.one(window),
+                winHeight = ndWin.get('winHeight'),
+                hostHeight = instance._hostHeight;
+
+            if (hostStyleTop) {
+                // 根据viewport高度动态调整top
+                if (winHeight < vTopOffset + hostHeight) {
+                    hostStyleTop = winHeight - hostHeight - delta;
+                } else {
+                    hostStyleTop = vTopOffset;
+                }
+            }
+
+            instance._hostStyleTop =  hostStyleTop;
+            // 垂直对齐
+            instance._alignVertical();
+
+            // 水平对齐
+            instance._alignHorizontal();
+        },
+        /**
+         * 获取下边界
+         * @warning: 如果`bottomEdge`是节点,页面高度可能会发生变化，因此需要重新计算坐标
+         */
+        _getBottomEdge: function (forceUpdate) {
+            var instance = this,
+                config = this.config,
+                bottomEdge = config.bottomEdge,
+                isStaticBottomEdge = config.isStaticBottomEdge,
+                docHeight = instance.ndHost.get('docHeight'),
+                nd = Y.one(bottomEdge),
+                edge = bottomEdge;
+            if (isStaticBottomEdge) {
+                // 如果instance._staticBottomEdge 已取值，则直接返回
+                if (instance._staticBottomEdge && !forceUpdate) return instance._staticBottomEdge;
+
+                if (Y.Lang.isNumber(bottomEdge)) {
+                    edge = parseInt(bottomEdge, 10);
+                } else if (nd) {
+                    edge = nd.getY();
+                } else {
+                    // 默认edge是文档最底部
+                    edge = docHeight;
+                }
+
+                // 缓存_staticBottomEdge的值，保证staticEdge只计算一次
+                instance._staticBottomEdge = edge;
+            } else {
+                if (nd) {
+                    edge = nd.getY();
+                } else {
+                    // 默认edge是文档最底部
+                    edge = docHeight;
+                }
+            }
+
+            return edge;
+        },
+        destroy: function () {
+
+            this._destroy = true;
+            // 使用throttle绑定的监听函数，在detach后，回调函数还会执行一次
+            // 因为setTimeout的原因
+            $Util.detachHandle(this._handlers);
+        }
+    };
+
+    Y.namespace('mt.uix');
+    Y.mt.uix.Sticky = Sticky;
+
+}, '1.0.0', {
+    requires: [
+        'mt-base',
+        'mt-uiutil',
+        'node'
+    ]
+});
+
+
+;

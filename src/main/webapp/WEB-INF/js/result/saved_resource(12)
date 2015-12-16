@@ -1,0 +1,484 @@
+/*jshint white:true, unused:true*/
+/**
+ * 主站消息
+ *
+ * @module www-tips
+ */
+M.add('www-tips', function (Y) {
+    var $N = Y.Node,
+        isIE =  Y.UA.ie;
+
+    var $Util = Y.mt.util,
+        $Cookie = $Util.Cookie;
+
+    /**
+     * 系统信息
+     * @class SysMsg
+     * @namespace Y.mt.www
+     * @static
+     */
+    Y.mt.www.SysMsg = {
+        /**
+         * 显示提示信息
+         * @method show
+         * @param {String} type: success, error, info
+         * @param {String} message
+         */
+        show: function (type, message) {
+            var ndFirstSysMsg,
+                nlSysMsg = Y.all('.sysmsgw'),
+                ndStatus,
+                ndMsgContent,
+                ndHeader;
+
+            if (nlSysMsg.size()) {
+                ndFirstSysMsg = nlSysMsg.item(0);
+            } else {
+                ndFirstSysMsg = $N.create('<div class="sysmsgw common-tip"><div class="sysmsg"><span class="J-msg-content"></span><span class="close common-close">关闭</span></div></div>');
+                ndHeader = Y.one('#hdw') || Y.one('#site-mast');
+                ndHeader.insert(ndFirstSysMsg, 'after');
+            }
+            ndStatus = ndFirstSysMsg.one('.J-tip-status');
+            if (ndStatus) {
+                ndStatus.remove(true);
+            }
+            ndStatus = $N.create('<span class="J-tip-status tip-status"></span>');
+            ndStatus.addClass('tip-status--' + type);
+            ndMsgContent = ndFirstSysMsg.one('.J-msg-content, p');
+            ndMsgContent.setHTML(message);
+            ndFirstSysMsg.set('id', 'sysmsg-' + type);
+            ndMsgContent.prepend(ndStatus);
+            this.initEvent();
+        },
+        /**
+         * 删除首条提示信息
+         * @method remove
+         * @param {Boolean} all 移除所有错误提示
+         */
+        remove: function (all) {
+            var nlSysMsg = Y.all('.sysmsgw');
+            if (nlSysMsg.size()) {
+                if (!all) {
+                    nlSysMsg.item(0).remove(true);
+                } else {
+                    nlSysMsg.remove(true);
+                }
+            }
+        },
+        /**
+         * 初始化事件
+         * @method initEvent
+         */
+        initEvent: function () {
+            var ndMsg = Y.one('#sysmsg-error, #sysmsg-success');
+            if (!ndMsg) return;
+
+            ndMsg.delegate('click', function () {
+                ndMsg.remove(true);
+            }, '.close');
+        },
+        /**
+         * 初始化系统提示
+         * @method init
+         */
+        init: function (content, ndParent) {
+            if (!content) return;
+
+            var ndTip;
+            var SYSTIP_COOKIE_NAME = 'systip';
+
+            // YUI Node
+            if (content._node) {
+                ndTip = content;
+            } else {
+                ndTip = Y.Node.create(content);
+            }
+            ndParent = ndParent && Y.one(ndParent) || Y.one('body');
+            ndParent.prepend(ndTip);
+            Y.Global.fire('PageHeight:change');
+            if (isIE && isIE < 8) {
+                $Util.reflow();
+            }
+
+            ndTip.delegate('click', function () {
+                var params = $Util.decodeAttr(ndTip, 'params');
+                if (params && params.cookieClose) {
+                    // 过期时间15天
+                    var expiresDate = $Cookie.getExpiresDate(15, 0, 0);
+                    $Cookie.set(SYSTIP_COOKIE_NAME, true, expiresDate, '/', '.' + M.DOMAIN_HOST);
+                }
+                ndTip.remove(true);
+                if (isIE === 6) {
+                    $Util.reflow();
+                }
+            }, '.close');
+        }
+    };
+    /**
+     * 通用提示信息
+     * @class CommonTips
+     * @namespace Y.mt.www
+     * @static
+     */
+    Y.mt.www.CommonTips = {
+        /**
+         * @property _isFirstMsg
+         */
+        _isFirstMsg: true,
+        /**
+         * 需要异步请求获取提示信息时，可用该接口
+         * @method init
+         */
+        init: function (content, xhrRes, ndParent) {
+            if (!content) return;
+
+            var ndTips;
+
+            // YUI Node
+            if (content._node) {
+                ndTips = content;
+            } else {
+                ndTips = Y.Node.create(content);
+            }
+            ndParent = ndParent && Y.one(ndParent) || Y.one('body');
+            ndParent.prepend(ndTips);
+            ndTips.show();
+            Y.Global.fire('PageHeight:change');
+            if (isIE && isIE < 8) {
+                $Util.reflow();
+            }
+
+            var ndClose = ndTips.one('.close'),
+                async,
+                asyncData = $Util.decodeAttr(ndTips, 'commontips'),
+                isMsgEmpty = false,
+                commontips = this;
+
+            ndTips.plug(Y.mt.plugin.Effect);
+            ndTips.delegate('click', function () {
+                if ((async && async.isInProgress()) || isMsgEmpty) return;
+                var data = {};
+                if (xhrRes) {
+                    if (xhrRes.type) {
+                        data.type = xhrRes.type;
+                    }
+                    if (xhrRes.msgid) {
+                        data.msgid = xhrRes.msgid;
+                    }
+                }
+                async = Y.io('/index/commontips', {
+                    method: 'POST',
+                    data: Y.merge(asyncData, data),
+                    on: {
+                        success: handleMsgRcvd
+                    }
+                });
+            }, '.close');
+
+            /**
+             * @description 异步请求success时执行的函数
+             */
+            function handleMsgRcvd(id, o) {
+                var content;
+                xhrRes = $Util.getEvalRes(o);
+                if (xhrRes.status === 0 || !xhrRes.msg) {
+                    isMsgEmpty = true;
+                } else {
+                    content = "<p>" + xhrRes.msg + "</p>";
+                    ndClose.setAttribute('gaevent', xhrRes.gaevent);
+                }
+                if (isMsgEmpty) {
+                    ndTips.effect.fadeOut(false, 200, function () {
+                        Y.Global.fire('PageHeight:change');
+                    });
+                } else {
+                    ndTips.effect.fadeOutSimple(false, 200, function () {
+                        commontips.show(ndTips, content);
+                    });
+                }
+            }
+        },
+        /**
+         * 信息展示
+         * @method show
+         * @param {String} content
+         */
+        show: function (ndTips, content) {
+            var ndTipsContent = ndTips.one('.content');
+            ndTipsContent.setHTML(content);
+            ndTips.effect.fadeInSimple('middle', function () {
+                if (isIE && isIE < 8) {
+                    $Util.reflow();
+                }
+            });
+            this.trackViewEvent(ndTips);
+        },
+        /**
+         * 追踪查看事件
+         * @method trackViewEvent
+         * @param {Node} ndRoot
+         */
+        trackViewEvent: function (ndRoot) {
+            var ATTR_NAME = 'ga-params',
+                nlView = ndRoot.all('[data-' + ATTR_NAME + ']');
+            nlView.each(function (ndView) {
+                var params = $Util.data(ndView, ATTR_NAME).split('|');
+                _gaq.push(['_trackEvent'].concat(params));
+            });
+        }
+    };
+
+    /**
+     * 代金券领取通知，成长通知气泡异步化
+     * @method initVipBubble
+     */
+    Y.mt.www.VipBubble = {
+        success: function (id, bubbleInfo, args) {
+            var ndAnchor = args.node,
+                ndBubble = ndAnchor.ancestor().insertBefore(bubbleInfo.markup, ndAnchor);
+            Y.mt.www.VipBubble.bindBubbleEvents(ndBubble, bubbleInfo.cn);
+        },
+        bindBubbleEvents: function (ndBubble, cookieName) {
+            ndBubble.show();
+            // 如果点了按钮或者点了关闭，设cookie下次不弹出
+            ndBubble.delegate('click', function () {
+                ndBubble.hide();
+                $Cookie.set(cookieName, true, $Cookie.getExpiresDate(20, 0, 0), '/', '.' + M.DOMAIN_HOST);
+            }, '.close');
+        }
+    };
+    Y.mt.www.MsgCenter = {
+        success: function (id, res, args) {
+            var ndMsgW = args.node,
+                ndMsg = Y.one('#J-my-msg'),
+                total = res.total;
+            if (res.msglist) {
+                ndMsgW.show();
+                ndMsgW.appendChild(res.msglist);
+                ndMsg.on('hover', function () {
+                    Y.mt.www.MsgCenter.initScroll(Y.one('#J-header-msg-list'));
+                });
+                if (total > 0 && isInShowPages()) {
+                    ndMsg.one('.J-title').insert('<span class="J-msg-count msg-count">' + total + '</span>', 'after');
+                }
+            }
+            function isInShowPages() {
+                var pages = ['/deal/buy/', '/order/check/', '/order/return/'],
+                    path = document.location.pathname;
+
+                for (var i = 0; i < pages.length; i++) {
+                    if (path.indexOf(pages[i]) === 0) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        },
+        /*
+        * 
+        */
+        bindMsgEvent: function (ndContainer, readCb, delCb, page) {
+            ndContainer = Y.one(ndContainer);
+            page = page || 'nav';
+            if (!ndContainer) return;
+            //已读
+            ndContainer.delegate('click', function (e) {
+                var ndLi,
+                    href,
+                    isClose = e.target.hasClass('J-close');
+
+                if (isClose) return;
+                if (this.get('tagName').toLowerCase() === 'a') {
+                    ndLi =  this.ancestor('li');
+                } else {
+                    ndLi = this;
+                }
+
+                //需要阻止冒泡
+                e.halt();
+                io('/message/read', ndLi, function () {
+                    updateMsg(ndLi);
+                    ndLi.addClass('isread');
+                    if (readCb) readCb();
+                });
+                href = this.getAttribute('href');
+                window._gaq.push(['_trackEvent', 'InnerLink', 'Click', page + '/drop/msgread/' + ndLi.getData('mid')]);
+                if (href) {
+                    window.open(href, '_blank');
+                } else if (ndLi.ancestor('ul').get('id') === 'J-header-msg-list') {
+                    window.open('/message/', '_blank');
+                }
+            }, 'a, li');
+            //关闭删除
+            ndContainer.delegate('click', function () {
+                var ndLi =  this.ancestor('li');
+                ndLi.hide(200, null, function () {
+                    if (!ndContainer.all('[data-mid]').some(function (nd) {
+                        return nd.getStyle('display') !== 'none';
+                    })) {
+                        ndContainer.replace('<p class="no-msg">暂无新消息</p>');
+                    }
+                    io('/message/delete', ndLi, function () {
+                        updateMsg(ndLi);
+                    });
+                    if (delCb) delCb();
+                    window._gaq.push(['_trackEvent', 'InnerLink', 'Click', page + '/drop/msgdel/' + ndLi.getData('mid')]);
+                });
+            }, '.J-close');
+            //设置hover
+            ndContainer.delegate('hover', function () {
+                this.addClass('current');
+            }, function () {
+                this.removeClass('current');
+            }, 'li');
+            function io(action, ndContainer, sucCb) {
+                if (!ndContainer) return;
+                Y.io(action, {
+                    method: 'POST',
+                    data: {
+                        msgid: ndContainer.getData('mid')
+                    },
+                    on: {
+                        success: sucCb
+                    }
+                });
+            }
+            //更新header未读消息数量
+            function updateMsg(ndLi) {
+                var count = 0,
+                    ndCount = Y.one('#J-my-msg .J-msg-count');
+
+                if (!ndLi.hasClass('isread')) {
+                    if (ndCount) {
+                        count = parseInt(ndCount.get('innerHTML'), 10);
+                        count--;
+                        if (count > 0) {
+                            ndCount.setHTML(count);
+                        } else {
+                            ndCount.ancestor().remove(true);
+                        }
+                    }
+                }
+            }
+        },
+        /**
+        * 模拟滚动条
+        * ndContainer 滚动条的父元素
+        */
+        initScroll: function (ndContainer) {
+            if (!ndContainer) return;
+
+            var scrollTpl = '<div class="scroll-bar"></div>',
+                scrollH,
+                h,
+                scrollAreaH,
+                ratio,
+                ndScroll = Y.Node.create(scrollTpl),
+                scrollTop = 0,
+                step = 20,
+                time = 2000,
+                hideTimer,
+                initTop = 10,
+                direction = 0, //上一刻滚动的方向,未滚动时为-1
+                attach;
+
+            window._gaq.push(['_trackEvent', 'InnerLink', 'Click', 'nav/drop/mymsg']);
+            if (ndContainer.next('.scroll-bar')) {
+                ndScroll = ndContainer.next('.scroll-bar');
+                ndScroll.setStyle('opacity', '0.5');
+                hide();
+                return;
+            }
+            ndContainer.ancestor().appendChild(ndScroll);
+            this.bindMsgEvent(ndContainer, null, function () {
+                calcPos();
+            });
+            //保证事件发生在uix事件之后
+            window.setTimeout(function () {
+                calcPos();
+                hideTimer = hide();
+                bindHover();
+            }, 200);
+            //计算滚动条的高度和top
+            function calcPos() {
+                scrollH = ndContainer.get('scrollHeight');
+                h = parseInt(ndContainer.get('clientHeight'), 10);
+                scrollAreaH = h - initTop * 2;
+                scrollTop = ndContainer.get('scrollTop');
+                ratio = scrollAreaH / scrollH;
+                if (scrollH <= h) {
+                    ndScroll.setStyles({height: '0px', top: initTop + 'px', right: '2px'});
+                } else {
+                    ndScroll.setStyles({height: (ratio * h) + 'px', top: scrollTop * ratio + initTop  + 'px', right: '2px'});
+                }
+            }
+            function bindHover() {
+                ndContainer.on('hover', function () {
+                    attach = bindScrollEvent();
+                }, function () {
+                    if (attach) attach.detach();
+                });
+            }
+            function hide() {
+                return window.setTimeout(function () {
+                    ndScroll.setStyle('opacity', '0');
+                }, time);
+            }
+            function bindScrollEvent() {
+                return ndContainer.on({
+                    mousewheel: function (e) {
+                        e.halt(true);
+                        if (hideTimer) {
+                            window.clearTimeout(hideTimer);
+                            hideTimer = null;
+                        }
+                        ndScroll.setStyle('opacity', '0.5');
+                        hideTimer = hide();
+                        //上一刻的方向和本次不相同
+                        if (e.wheelDelta * direction <= 0 || (scrollTop >= 0 && scrollTop <= scrollH - h)) {
+                            if (e.wheelDelta > 0) { //向上滚动
+                                scrollTop -= step;
+                                direction = 1;
+                            } else { //向下滚动
+                                scrollTop += step;
+                                direction = -1;
+                            }
+                        }
+                        if (scrollTop < 0) {
+                            scrollTop = 0;
+                        } else if (scrollTop >= scrollH - h) {
+                            scrollTop = scrollH - h;
+                        }
+                        ndScroll.setStyle('opacity', 0.5);
+                        ndScroll.setStyle('top', scrollTop * ratio + initTop);
+                        ndContainer.set('scrollTop', scrollTop);
+                    }
+                });
+            }
+        }
+    };
+
+    Y.mt.www.Tips = {
+        success: function (id, info, args) {
+            var ndAnchor = args.node,
+                ndParent = ndAnchor.getData('parent');
+
+            if (info.sysmsg) {
+                Y.mt.www.SysMsg.init(info.sysmsg, ndParent);
+            } else if (info.commontips) {
+                Y.mt.www.CommonTips.init(info.commontips.html, info.commontips.info, ndParent);
+            }
+        }
+    };
+},
+// version
+'1.0.0',
+
+// dependency
+{
+    requires: [
+        'transition',
+        'www-base'
+    ]
+});
+;

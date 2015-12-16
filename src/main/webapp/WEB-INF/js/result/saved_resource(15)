@@ -1,0 +1,150 @@
+/*jshint white:true,unused:true*/
+/**
+ * 平滑滚动模块
+ * @module uix-smoothscroll
+ */
+M.add('uix-smoothscroll', function (Y) {
+
+    /**
+     * 平滑滚动类
+     *
+     * 实现单击trigger时滚动到指定位置
+     * 最终位置为scroll指定的位置 + extraNodeSign * extraNode的高度 + extraPx
+     *
+     * @class Smoothscroll
+     * @namespace mt.uix
+     * @constructor
+     * @param {Node|Selector} ndContainer 容器
+     * @param {Object} config 配置项
+     * @example
+     *     <ul data-uix="smoothscroll" data-params="{ trigger: '.J-smoothscroll-trigger', extraPx: -10 }">
+     *         <li><a class="J-smoothscroll-trigger" data-scroll="#selector">trigger1</a></li>
+     *         <li><a class="J-smoothscroll-trigger" data-scroll="200">trigger2</a></li>
+     *     </ul>
+     */
+    function Smoothscroll(ndContainer, config) {
+        ndContainer = Y.one(ndContainer);
+        if (!ndContainer) return;
+
+        var defaultConfig = {
+            /**
+            * 触发器, 各个触发器上需要指定对应的scroll
+            * @attribute trigger
+            * @type {Selector}
+            * @default 'a'
+            */
+            trigger: 'a',
+            /**
+            * 偏移节点，取该节点的高度作为target的偏移量
+            * @attribute extraNode
+            * @type {Selector}
+            * @default ''
+            */
+            extraNode: '',
+            /**
+            * 偏移节点的计算系数，可为负，默认为1
+            * @attribute extraNodeSign
+            * @type {Number}
+            * @default 1
+            */
+            extraNodeSign: 1,
+            /**
+            * 相对于target的偏移量，值为像素，可以和偏移节点叠加
+            * @attribute extraPx
+            * @type {Number}
+            * @default 0
+            */
+            extraPx: 0,
+            /**
+            * 滚动时动画效果
+            * @attribute easing
+            * @type {String}
+            * @default 'easeOutStrong'
+            */
+            easing: 'easeOutStrong',
+            /**
+             * 滚动的容器
+             * @attribute scrollBox
+             * @type {Selector}
+             * @default window
+             */
+            scrollBox: Y.config.win
+        };
+
+        config = Y.merge(defaultConfig, config || {});
+
+        ndContainer.delegate('click', function (e) {
+            e.preventDefault();
+            var scrollBox = Y.one(config.scrollBox) || Y.one(Y.config.win),
+                target = this.getData('scroll'),
+                ndTarget = target && Y.one(target),
+                ndExtraNode = Y.one(config.extraNode),
+                result = 0,
+                distance = 0,
+                extraPx = 0;
+
+            if (ndTarget) {
+                if(scrollBox === Y.one(Y.config.win)) {
+                    result = ndTarget.getY();
+                } else if (!ndTarget.ancestor(config.scrollBox)) {
+                   return; 
+                } else {
+                    //检测scrollBox是否有定位，只有当其position为非static时其才能成为offsetParent
+                    var hasPosition = scrollBox.getStyle('position') !== 'static';
+                    if(!hasPosition) {
+                        scrollBox.setStyle('position', 'relative')
+                    }
+                    var n = ndTarget.get('offsetParent');
+                    result += ndTarget.get('offsetTop');
+                    while(n && n !== scrollBox) {
+                        result += n.get('offsetTop');
+                        n = n.get('offsetParent'); 
+                    }
+                    if(n !== scrollBox) {
+                        return;
+                    } 
+                    if(!hasPosition) {
+                        scrollBox.setStyle('position', 'static');
+                    }
+                }
+            } else if (target) {
+                var m = target.match(/^(\d+)(px)?$/i);
+                if(m && Y.Lang.isNumber(Number(m[1]))) {
+                    result = Number(m[1]);
+                }
+            }
+
+            if (ndExtraNode && Y.UA.ie !== 6) {
+                extraPx = config.extraNodeSign * ndExtraNode.get('offsetHeight');
+            }
+            result += extraPx + config.extraPx;
+            //计算滚动距离
+            distance = Math.abs(result - scrollBox.get('scrollTop'));
+
+            // IE8 兼容模式下会出现不能滚动到顶部的问题
+            // 修复方案：IE8 浏览器，则不使用动画
+            // IE6和IE7动画效果有些跳帧，所以取消动画
+            if (Y.UA.ie && Y.UA.ie < 9) {
+                scrollBox.set('scrollTop', result);
+            } else {
+                new Y.Anim({
+                    node: scrollBox,
+                    duration: Y.mt.lang.clamp(distance / 1000, 0.2, 0.6),
+                    to: { scroll: [0, result] },
+                    easing: config.easing ? config.easing : 'easeOutStrong'
+                }).run();
+            }
+        }, config.trigger);
+    }
+
+    Y.namespace('mt.uix');
+    Y.mt.uix.Smoothscroll = Smoothscroll;
+
+}, '1.0.0', {
+    requires: [
+        'mt-base', 'anim', 'node'
+    ]
+});
+
+
+;

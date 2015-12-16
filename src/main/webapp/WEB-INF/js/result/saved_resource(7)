@@ -1,0 +1,3833 @@
+/*jshint white:true, unused:true*/
+/**
+ * 表单字段值格式验证模块，提供表单提交前各字段合法性检验功能
+ * @module mt-formchecker
+ */
+M.add('mt-formchecker', function (Y) {
+    var $N = Y.Node,
+        $IO = Y.io,
+        $Obj = Y.Object,
+        isFunction = Y.Lang.isFunction,
+        isStr = Y.Lang.isString,
+        trim = Y.Lang.trim;
+    var $Util = Y.mt.util;
+
+    var CLASS_NAME = {
+            old: {
+                fieldGroup: 'field-group',
+                highlightGroup: 'field-group--highlight',
+                type: 'field-group--type',
+                ok: 'field-group--ok',
+                error: 'field-group--error'
+            },
+            'new': {
+                fieldGroup: 'form-field',
+                highlightGroup: 'form-field--highlight',
+                type: 'form-field--type',
+                ok: 'form-field--ok',
+                error: 'form-field--error'
+            }
+        },
+        DOT = '.',
+        ERROR_PREFIX = 'FormChecker: ',
+        CHECK_DELAY = 200,
+        SUCCESS = 'success',
+        FAILURE = 'failure';
+
+    /**
+     * 表单字段内容格式自动检验类
+     * @class FormChecker
+     * @namespace mt
+     * @constructor
+     * @event success
+     * @event failure
+     * @event submitSuccess
+     * @event submitFailure
+     * @param {Object} config 检验机制的参数配置
+     * @example
+        var checker = new FormChecker({
+            form: ndForm,
+            fields: {
+                'email': {
+                    node: ndEmail,
+                    validateFn: FormChecker.CHECK_EMPTY_FN,
+                    typeTip: '',
+                    errorTip: '请输入正确的邮箱、手机号或用户名'
+                },
+                'password': {
+                    node: ndPassword,
+                    validateFn: FormChecker.CHECK_EMPTY_FN,
+                    typeTip: '',
+                    errorTip: '请输入密码'
+                },
+                'captcha': {
+                    node: ndCaptcha,
+                    validateFn: FormChecker.CHECK_EMPTY_FN,
+                    typeTip: '',
+                    errorTip: '请输入验证码'
+                }
+            },
+            tipClass: FormChecker.CLASS_INLINE_TIP,
+            async: true // 推荐设置
+        });
+        checker.on('submitSuccess', function (e) {
+            // 在所有表单项（包括异步验证的表单项）检查通过后执行
+
+            if (some condition not satisfied) {
+                e.halt(); // 阻止默认提交行为
+                // do sth
+            }
+        });
+     *
+     */
+    function FormChecker() {
+        FormChecker.superclass.constructor.apply(this, arguments);
+    }
+    /**
+     * 类名，用来作为事件前缀
+     * @property NAME
+     * @static
+     * @type String
+     */
+    FormChecker.NAME = 'formChecker';
+    /**
+     * 表单项初始状态
+     * @property STATUS_INIT
+     * @static
+     * @type Number
+     */
+    FormChecker.STATUS_INIT = 0;
+    /**
+     * 表单项状态：检验中
+     * @property STATUS_CHECKING
+     * @static
+     * @type Number
+     */
+    FormChecker.STATUS_CHECKING = 1;
+    /**
+     * 表单项状态：检验后，通过验证
+     * @property STATUS_OK
+     * @static
+     * @type Number
+     */
+    FormChecker.STATUS_OK = 2;
+    /**
+     * 表单项状态：检验后，未通过验证
+     * @property STATUS_ERROR
+     * @static
+     * @type Number
+     */
+    FormChecker.STATUS_ERROR = 3;
+    /**
+     * 提示消息的样式：inline-level
+     * @property CLASS_INLINE_TIP
+     * @static
+     * @type String
+     */
+    FormChecker.CLASS_INLINE_TIP = 'inline-tip';
+    /**
+     * 提示消息的样式：block-level
+     * @property CLASS_BLOCK_TIP
+     * @static
+     * @type String
+     */
+    FormChecker.CLASS_BLOCK_TIP = 'block-tip';
+    /**
+     * 内置检验函数：检验表单项是否为空
+     * @property CHECK_EMPTY_FN
+     * @param {Node} node 表单项对应的Node
+     * @return {Boolean} true 表示验证不通过；false 表示验证通过
+     */
+    FormChecker.CHECK_EMPTY_FN = function (node) {
+        return trim(node.get('value')) === '';
+    };
+    /**
+     * 属性配置
+     * @property ATTRS
+     * @static
+     * @type Object
+     */
+    FormChecker.ATTRS = {
+        /**
+         * 所关联的表单
+         * @attribute form
+         * @type Node
+         * @default null
+         */
+        form: {
+            value: null,
+            setter: '_setForm',
+            writeOnce: true
+        },
+        /**
+         * 表单项配置
+         * @attribute fields
+         * @type Object
+         * @default null
+         * @example
+        {
+          'phone': {
+              node: ndPhone,                   // {HTMLElement|Selector|Node} 表单项节点
+              validateReg: /^.{7,}$/,          // {RegExp} 验证正则表达式，请不要使用global修饰符
+              typeTip: '请输入11位手机号码',   // {String} 输入提示
+              errorTip: '电话号码不能少于7位'  // {String} 错误提示
+          },
+         'username': {
+              node: ndUsername,
+              validateFn: checkUsername,        // {Function} 含有一个参数，代表当前节点。检查出错时返回true或错误信息，成功时返回false
+              validateAjax: {                   // {Object} 异步验证，在格式验证正确后执行。
+                  action: '/account/check',     // {String}
+                  dataFn: function () {         // {Function} Optional, 返回一个key-value对象，作为提交的data；如果没有指定，本类自动合成一个
+                      return {
+                          'username': ndUsername.get('value')
+                      };
+                  }
+              },
+              okTip: '用户名可用'               // {String} 如果配置中 showOkTip 为 true，则通过验证后显示 okTip
+          }
+        }
+         */
+        fields: {
+            value: null
+        },
+        /**
+         * 触发检验动作的事件
+         * @attribute checkEvent
+         * @type 'submit' | 'blur'
+         * @default 'submit'
+         */
+        checkEvent: {
+            value: 'submit',
+            writeOnce: true
+        },
+        /**
+         * 提示消息样式
+         * @attribute tipClass
+         * @type FormChecker.CLASS_INLINE_TIP | FormChecker.CLASS_BLOCK_TIP
+         * @default FormChecker.CLASS_INLINE_TIP
+         */
+        tipClass: {
+            value: FormChecker.CLASS_INLINE_TIP,
+            writeOnce: true
+        },
+        /**
+         * 通过验证后是否显示正确提示
+         * @attribute showOkTip
+         * @type Boolean
+         * @default false
+         */
+        showOkTip: {
+            value: false,
+            writeOnce: true
+        },
+        /**
+         * focus 时是否高亮当前表单项组
+         * @attribute hightlightGroup
+         * @type Boolean
+         * @default false
+         */
+        highlightGroup: {
+            value: false,
+            writeOnce: true
+        },
+        /**
+         * 是否采用异步验证，即在所有表单项同步、异步验证成功后
+         * 触发submitSuccess事件，默认行为为提交表单
+         * @attribute async
+         * @type Boolean
+         * @default false
+         */
+        async: {
+            value: false,
+            writeOnce: true
+        },
+        /**
+         * 是否为新表单样式，新旧表单样式混合使用的情况下明确样式类型
+         * @attribute newStyle
+         * @type Boolean
+         * @default false
+         */
+        newStyle: {
+            value: false,
+            writeOnce: true
+        }
+    };
+
+    var proto = {
+        /**
+         * 初始化
+         * @method initializer
+         */
+        initializer: function () {
+            var instance = this,
+                ndForm = instance.get('form'),
+                fields = instance.get('fields'),
+                async = instance.get('async'),
+                newStyle = instance.get('newStyle'),
+                submitSuccessConf;
+            if (!ndForm) throw new Error(ERROR_PREFIX + '必须设置form参数');
+            if (!fields) throw new Error(ERROR_PREFIX + '必须设置fields参数');
+            // 兼容新表单样式
+            if (newStyle) {
+                instance.className = CLASS_NAME['new'];
+            } else {
+                // 没有确认则通过样式名来判断
+                instance.className = ndForm.one(DOT + CLASS_NAME.old.fieldGroup) ?
+                                    CLASS_NAME['old'] : CLASS_NAME['new'];
+            }
+            instance.publish(SUCCESS, {
+                emitFacade: true,
+                defaultFn: instance._defSuccessFn
+            });
+            instance.publish(FAILURE, {
+                emitFacade: true,
+                defaultFn: instance._defFailureFn
+            });
+
+            submitSuccessConf = { emitFacade: true };
+            if (async) {
+                submitSuccessConf.defaultFn = function () {
+                    ndForm.submit();
+                };
+            }
+            instance.publish('submitSuccess', submitSuccessConf);
+            instance.publish('submitFailure', {
+                emitFacade: true
+            });
+
+            instance.on('fieldsChange', function () {
+                instance._buildFields();
+            });
+
+            instance._handles = {};
+            instance._buildFields();
+            instance._bind();
+        },
+        /**
+         * 析构
+         * @method destructor
+         */
+        destructor: function () {
+            $Util.detachHandle(this._handles);
+        },
+        /**
+         * 绑定事件
+         * @method _bind
+         * @private
+         */
+        _bind: function () {
+            var instance = this,
+                _handles = instance._handles,
+                ndForm = instance.get('form'),
+                async = instance.get('async'),
+                handleFn = async ? handleSubmitAsync : handleSubmit;
+
+            _handles.submit = ndForm.on('submit', handleFn);
+
+            _handles.focus = ndForm.delegate('focus', function () {
+                var field = instance._getFieldByNode(this);
+                if (!field) return;
+                instance.focusField(field, true);
+            }, 'input, textarea, select');
+
+            _handles.blur = ndForm.delegate('blur', function () {
+                var field = instance._getFieldByNode(this);
+                if (!field) return;
+                instance.blurField(field, true);
+            }, 'input, textarea, select');
+
+            Y.Global.on("formChecker:valueChange", function (o) {
+                var field = instance._getFieldByNode(o.node);
+                if (!field) return;
+                instance.blurField(field, true);
+            });
+
+            _handles.success = instance.on(SUCCESS, function (e) {
+                if (instance._updateUncheckedFields) {
+                    instance._updateUncheckedFields(e.field.name);
+                }
+            });
+            _handles.failure = instance.on(FAILURE, function (e) {
+                if (instance._updateUncheckedFields) {
+                    instance._updateUncheckedFields(e.field.name, true);
+                }
+            });
+
+            // 处理提交
+            function handleSubmit(e) {
+                if (!instance.check()) {
+                    e.halt(true);
+                    instance.fire('submitFailure');
+                } else {
+                    instance.fire('submitSuccess');
+                    Y.Global.fire('formChecker:submitSuccess', {instance: instance});
+                }
+            }
+
+            // 异步处理提交
+            function handleSubmitAsync(e) {
+                e.halt();
+                if (instance._isCheckingAsync) return;
+
+                instance._isCheckingAsync = true;
+                instance.checkAsync(function (err) {
+                    instance._isCheckingAsync = false;
+                    // 等待表单项检查结果事件(SUCCESS, FAILURE)回调执行完后触发表单提交结果事件
+                    window.setTimeout(function () {
+                        if (err) {
+                            instance.fire('submitFailure');
+                        } else {
+                            instance.fire('submitSuccess');
+                        }
+                    }, 0);
+                });
+            }
+        },
+        /**
+         * 检查表单项
+         * @method checkField
+         * @param {Object} field 配置项 fields 中的对应的项目
+         */
+        checkField: function (field) {
+            var instance = this,
+                ndField = field.node,
+                async = field._async,
+                error;
+
+            if (field.validateReg) {
+                error = !field.validateReg.test(ndField.get('value'));
+            } else if (field.validateFn) {
+                error = field.validateFn.call(ndField, ndField);
+            }
+
+            if (error) {
+                // 检验错误
+                monitor(FAILURE, field, error);
+            } else {
+                // 检验正确
+                if (!field.validateAjax) {
+                    monitor(SUCCESS, field);
+                } else {
+                    // 需要异步验证
+                    if (async && async.isInProgress()) {
+                        async.abort();
+                    }
+                    async = $IO(field.validateAjax.action, {
+                        method: 'POST',
+                        data: $Util.toPostData(field.validateAjax.dataFn()),
+                        on: {
+                            success: function (id, o) {
+                                var res = $Util.getEvalRes(o);
+                                if (res.status) {
+                                    monitor(SUCCESS, field);
+                                } else {
+                                    monitor(FAILURE, field, res.msg);
+                                }
+                            },
+                            failure: function (id, o) {
+                                if (o.statusText && o.statusText === 'abort') return;
+                                monitor(FAILURE, field, '网络有问题，请稍后重试');
+                            }
+                        }
+                    });
+                    if (async.isInProgress()) {
+                        instance._processType(field, '检查中...');
+                    }
+                    field._async = async;
+                }
+            }
+
+            // 监控检验结果
+            function monitor(type, field, error) {
+                var data = { field: field };
+                if (type === FAILURE && error) {
+                    data.error = error;
+                }
+
+                instance.fire(type, data);
+            }
+        },
+        /**
+         * 检查表单，忽略未完成异步验证的表单项
+         * @method check
+         * @return {Boolean} true 表示通过验证，false 表示未通过验证
+         */
+        check: function () {
+            var instance = this,
+                fields = instance.get('fields'),
+                isError = false;
+            $Obj.each(fields, function (field) {
+                if (field.status === FormChecker.STATUS_INIT ||
+                    field.status === FormChecker.STATUS_CHECKING) {
+                    instance.checkField(field);
+                }
+                if (field.status === FormChecker.STATUS_ERROR) {
+                    isError = true;
+                }
+            });
+
+            return !isError;
+        },
+        /**
+         * 检查表单，考虑未完成异步验证的表单项
+         * TIP 在异步验证过程中，不会处理又发生变化的表单项
+         * @method checkAsync
+         * @param {Function} callback
+         */
+        checkAsync: function (callback) {
+            var instance = this,
+                fields = instance.get('fields'),
+                _uncheckedFields = {},
+                isError = false;
+
+            $Obj.each(fields, function (field, name) {
+                if (field.status === FormChecker.STATUS_INIT ||
+                    field.status === FormChecker.STATUS_CHECKING) {
+                    _uncheckedFields[name] = true;
+                }
+                if (field.status === FormChecker.STATUS_ERROR) {
+                    isError = true;
+                }
+            });
+            if ($Obj.isEmpty(_uncheckedFields)) {
+                callback(isError);
+                return;
+            }
+
+            // 更新未检查完成的表单项，全部完成后设置为null
+            instance._updateUncheckedFields = function (name, error) {
+                if (!_uncheckedFields.hasOwnProperty(name)) return;
+                delete _uncheckedFields[name];
+
+                if (error) isError = true;
+                if ($Obj.isEmpty(_uncheckedFields)) {
+                    instance._updateUncheckedFields = null;
+                    callback(isError);
+                }
+            };
+            $Obj.each(_uncheckedFields, function (flag, name) {
+                instance.checkField(fields[name]);
+            });
+        },
+        /**
+         * 定焦到表单项
+         * @method focusField
+         * @param {Object} field
+         * @param {Boolean} alreadyFocus=false
+         */
+        focusField: function (field, alreadyFocus) {
+            var instance = this,
+                ndField = field.node,
+                ndGroup = field.groupNode,
+                highlightGroup = instance.get('highlightGroup');
+
+            if (!alreadyFocus) ndField.focus();
+            if (ndField.test('input[type=text], input[type=password], textarea')) {
+                if (highlightGroup) {
+                    ndGroup.addClass(instance.className.highlightGroup);
+                }
+            }
+            instance._processType(field);
+        },
+        /**
+         * 焦点离开表单项
+         * @method blurField
+         * @param {Object} field
+         * @param {Boolean} alreadyBlur=false
+         */
+        blurField: function (field, alreadyBlur) {
+            var instance = this,
+                ndField = field.node,
+                highlightGroup = instance.get('highlightGroup'),
+                checkEvent = instance.get('checkEvent');
+
+            if (!alreadyBlur) ndField.blur();
+            if (highlightGroup) {
+                field.groupNode.removeClass(instance.className.highlightGroup);
+            }
+
+            if (checkEvent === 'blur') {
+                // 延迟验证，方便类似email自动完成等辅助功能填值
+                window.setTimeout(function () {
+                    instance.checkField(field);
+                }, CHECK_DELAY);
+            } else {
+                instance.clearTip(field);
+            }
+        },
+        /**
+         * 处理输入时状态和提示
+         * @method _processType
+         * @private
+         * @param {Object} field
+         * @param {String} tip
+         */
+        _processType: function (field, tip) {
+            field.status = FormChecker.STATUS_CHECKING;
+            tip = tip || field.typeTip;
+            if (tip === '') {
+                this.clearTip(field);
+            } else {
+                this._setTip(field, this.className.type, tip);
+            }
+        },
+        /**
+         * 验证通过时默认调用的方法
+         * @method _defSuccessFn
+         * @private
+         * @param {Object} e
+         * @param {String} tip
+         */
+        _defSuccessFn: function (e, tip) {
+            var field = e.field,
+                show = field.showOkTip;
+            field.status = FormChecker.STATUS_OK;
+            if (show) {
+                this._setTip(field, this.className.ok, tip || field.okTip || '');
+            } else {
+                this.clearTip(field);
+            }
+        },
+        /**
+         * 验证失败时默认调用的方法
+         * @method _defFailureFn
+         * @private
+         * @param {Object} e
+         * @param {String} msg
+         */
+        _defFailureFn: function (e) {
+            var field = e.field,
+                msg = e.error;
+            field.status = FormChecker.STATUS_ERROR;
+            if (msg === true) {
+                // 若验证方法返回true而非错误信息，则显示配置中的errorTip
+                msg = field.errorTip;
+            }
+            this._setTip(field, this.className.error, msg || field.errorTip);
+        },
+        /**
+         * 设置提示消息
+         * @method _setTip
+         * @private
+         * @param {Object|String} field
+         * @param {String} cssClass
+         * @param {String} tip
+         */
+        _setTip: function (field, cssClass, tip) {
+            var instance = this,
+                fields = instance.get('fields'),
+                tipClass = instance.get('tipClass'),
+                className = instance.className,
+                ndGroup,
+                ndTip;
+
+            if (isStr(field)) {
+                field = fields[field];
+            }
+            ndGroup = field.groupNode;
+            ndTip = ndGroup.one(DOT + tipClass);
+            if (!ndTip) {
+                ndTip = $N.create('<span class="' + tipClass + '"></span>');
+                ndGroup.append(ndTip);
+            }
+            // 兼容新表单样式
+            if (className === CLASS_NAME['new']) {
+                switch (cssClass) {
+                case className.type:
+                    tip = '<i class="tip-status"></i>' + tip;
+                    break;
+                case className.ok:
+                    tip = '<i class="tip-status tip-status--success"></i>' + tip;
+                    break;
+                case className.error:
+                    tip = '<i class="tip-status tip-status--opinfo"></i>' + tip;
+                    break;
+                }
+            }
+            instance.replaceGroupClass(field, cssClass);
+            ndTip.setHTML(tip).show();
+        },
+        /**
+         * 验证通过后提示正确消息
+         * @method setOkTip
+         * @param {Object|String} field
+         * @param {String} tip
+         */
+        setOkTip: function (field, tip) {
+            this._setTip(field, this.className.ok, tip);
+        },
+        /**
+         * 验证失败后提示错误消息
+         * @method setErrorTip
+         * @param {Object|String} field
+         * @param {String} tip
+         */
+        setErrorTip: function (field, tip) {
+            this._setTip(field, this.className.error, tip);
+        },
+        /**
+         * 输入时提示消息
+         * @method setTypeTip
+         * @param {Object|String} field
+         * @param {String} tip
+         */
+        setTypeTip: function (field, tip) {
+            this._setTip(field, this.className.type, tip);
+        },
+        /**
+         * 清除提示
+         * @method clearTip
+         * @param {Object|String} field
+         */
+        clearTip: function (field) {
+            var instance = this,
+                fields = instance.get('fields'),
+                ndGroup,
+                ndTip;
+
+            if (isStr(field)) {
+                field = fields[field];
+            }
+            ndGroup = field.groupNode;
+            ndTip = ndGroup.one(DOT + instance.get('tipClass'));
+            if (ndTip) {
+                ndTip.setHTML('').hide();
+            }
+
+            instance.replaceGroupClass(field);
+        },
+        /**
+         * 替换表单项组节点样式
+         * @method replaceGroupClass
+         * @param {Object} field
+         * @param {String} cssClass=''
+         */
+        replaceGroupClass: function (field, cssClass) {
+            var ndGroup = field.groupNode,
+                className = this.className;
+            Y.Array.each([className.type, className.ok, className.error], function (name) {
+                ndGroup.removeClass(name);
+            });
+            if (cssClass) {
+                ndGroup.addClass(cssClass);
+            }
+        },
+        /**
+         * 由节点获得表单项配置
+         * @method _getFieldByNode
+         * @private
+         * @param {Node} node
+         * @return {Object} field
+         */
+        _getFieldByNode: function (node) {
+            var fields = this.get('fields'),
+                ret = null;
+            $Obj.some(fields, function (field) {
+                if (field.node === node) {
+                    ret = field;
+                    return true;
+                }
+            });
+            return ret;
+        },
+        /**
+         * 添加表单项配置
+         * @method addField
+         * @param {String} name
+         * @param {Object} config
+         * @return {Boolean} true 表示添加成功，false 表示添加失败
+         */
+        addField: function (name, config) {
+            var instance = this,
+                fields = instance.get('fields'),
+                showOkTip = instance.get('showOkTip');
+
+            var ndField = Y.one(config.node),
+                ndGroup = ndField && ndField.ancestor(DOT + instance.className.fieldGroup);
+            if (!ndField || !ndGroup) return false;
+
+            Y.mix(config, {
+                name: name,
+                node: ndField,
+                groupNode: ndGroup,
+                status: FormChecker.STATUS_INIT,
+                showOkTip: config.hasOwnProperty('showOkTip') ?
+                                config.showOkTip :
+                                showOkTip
+            }, true);
+            if (config.validateAjax &&
+                !isFunction(config.validateAjax.dataFn)) {
+                config.validateAjax.dataFn = function () {
+                    var ret = {};
+                    ret[ndField.get('name')] = ndField.get('value');
+                    return ret;
+                };
+            }
+            fields[name] = config;
+
+            return true;
+        },
+        /**
+         * 添加多个表单项配置
+         * @method addFields
+         * @param {Object} fields
+         * @return {Boolean} true 表示添加成功，false 表示添加失败
+         */
+        addFields: function (fields) {
+            var instance = this,
+                name,
+                ret = true;
+            for (name in fields) {
+                if (fields.hasOwnProperty(name)) {
+                    ret = instance.addField(name, fields[name]) && ret;
+                }
+            }
+            return ret;
+        },
+        /**
+         * 删除表单项配置
+         * @method removeField
+         * @param {Object|String} field
+         * @return {Boolean} true 表示删除成功，false 表示删除失败
+         */
+        removeField: function (field) {
+            var instance = this,
+                fields = instance.get('fields'),
+                name = isStr(field) ? field : field.name;
+            if (fields.hasOwnProperty(name)) {
+                delete fields[name];
+                return true;
+            }
+            return false;
+        },
+        /**
+         * 重置全部表单项
+         * @method resetAllFields
+         */
+        resetAllFields: function () {
+            var instance = this,
+                fields = instance.get('fields');
+            Y.Object.each(fields, function (field) {
+                instance.resetField(field);
+            });
+        },
+        /**
+         * 重置表单项，包括重置检查状态、清空提示信息
+         * @method resetField
+         * @param {Object|String} field
+         */
+        resetField: function (field) {
+            var instance = this,
+                fields = instance.get('fields');
+            if (isStr(field)) {
+                field = fields[field];
+            }
+            field.status = FormChecker.STATUS_INIT;
+            instance.clearTip(field);
+        },
+        /**
+         * 设置所有表单项配置
+         * @method _buildFields
+         * @private
+         */
+        _buildFields: function () {
+            var instance = this,
+                fields = instance.get('fields');
+
+            $Obj.each(fields, function (field, name) {
+                var ret = instance.addField(name, field);
+                if (!ret) {
+                    delete fields[name];
+                }
+            });
+        },
+        /**
+         * @description 设置表单
+         * @method _setForm
+         * @private
+         * @param {Selector|HTMLElement|Node} val
+         * @return {Node}
+         */
+        _setForm: function (val) {
+            return Y.one(val);
+        }
+    };
+
+    Y.extend(FormChecker, Y.Base, proto);
+    Y.mt.FormChecker = FormChecker;
+},
+// version
+'1.0.0',
+// dependency
+{
+    requires: [
+        'mt-base',
+        'io-base',
+        'base-base',
+        'node'
+    ]
+});
+ 
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("attribute-complex",function(e,t){var n=e.Attribute;n.Complex=function(){},n.Complex.prototype={_normAttrVals:n.prototype._normAttrVals,_getAttrInitVal:n.prototype._getAttrInitVal},e.AttributeComplex=n.Complex},"3.16.0",{requires:["attribute-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("base-pluginhost",function(e,t){var n=e.Base,r=e.Plugin.Host;e.mix(n,r,!1,null,1),n.plug=r.plug,n.unplug=r.unplug},"3.16.0",{requires:["base-base","pluginhost"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("classnamemanager",function(e,t){var n="classNamePrefix",r="classNameDelimiter",i=e.config;i[n]=i[n]||"yui3",i[r]=i[r]||"-",e.ClassNameManager=function(){var t=i[n],s=i[r];return{getClassName:e.cached(function(){var n=e.Array(arguments);return n[n.length-1]!==!0?n.unshift(t):n.pop(),n.join(s)})}}()},"3.16.0",{requires:["yui-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-base",function(e,t){function R(e){var t=this,n,r,i=t.constructor;t._strs={},t._cssPrefix=i.CSS_PREFIX||s(i.NAME.toLowerCase()),e=e||{},R.superclass.constructor.call(t,e),r=t.get(T),r&&(r!==P&&(n=r),t.render(n))}var n=e.Lang,r=e.Node,i=e.ClassNameManager,s=i.getClassName,o,u=e.cached(function(e){return e.substring(0,1).toUpperCase()+e.substring(1)}),a="content",f="visible",l="hidden",c="disabled",h="focused",p="width",d="height",v="boundingBox",m="contentBox",g="parentNode",y="ownerDocument",b="auto",w="srcNode",E="body",S="tabIndex",x="id",T="render",N="rendered",C="destroyed",k="strings",L="<div></div>",A="Change",O="loading",M="_uiSet",_="",D=function(){},P=!0,H=!1,B,j={},F=[f,c,d,p,h,S],I=e.UA.webkit,q={};R.NAME="widget",B=R.UI_SRC="ui",R.ATTRS=j,j[x]={valueFn:"_guid",writeOnce:P},j[N]={value:H,readOnly:P},j[v]={valueFn:"_defaultBB",setter:"_setBB",writeOnce:P},j[m]={valueFn:"_defaultCB",setter:"_setCB",writeOnce:P},j[S]={value:null,validator:"_validTabIndex"},j[h]={value:H,readOnly:P},j[c]={value:H},j[f]={value:P},j[d]={value:_},j[p]={value:_},j[k]={value:{},setter:"_strSetter",getter:"_strGetter"},j[T]={value:H,writeOnce:P},R.CSS_PREFIX=s(R.NAME.toLowerCase()),R.getClassName=function(){return s.apply(i,[R.CSS_PREFIX].concat(e.Array(arguments),!0))},o=R.getClassName,R.getByNode=function(t){var n,i=o();return t=r.one(t),t&&(t=t.ancestor("."+i,!0),t&&(n=q[e.stamp(t,!0)])),n||null},e.extend(R,e.Base,{getClassName:function(){return s.apply(i,[this._cssPrefix].concat(e.Array(arguments),!0))},initializer:function(t){var n=this.get(v);n instanceof r&&this._mapInstance(e.stamp(n))},_mapInstance:function(e){q[e]=this},destructor:function(){var t=this.get(v),n;t instanceof r&&(n=e.stamp(t,!0),n in q&&delete q[n],this._destroyBox())},destroy:function(e){return this._destroyAllNodes=e,R.superclass.destroy.apply(this)},_destroyBox:function(){var e=this.get(v),t=this.get(m),n=this._destroyAllNodes,r;r=e&&e.compareTo(t),this.UI_EVENTS&&this._destroyUIEvents(),this._unbindUI(e),t&&(n&&t.empty(),t.remove(P)),r||(n&&e.empty(),e.remove(P))},render:function(e){return!this.get(C)&&!this.get(N)&&(this.publish(T,{queuable:H,fireOnce:P,defaultTargetOnly:P,defaultFn:this._defRenderFn}),this.fire(T,{parentNode:e?r.one(e):null})),this},_defRenderFn:function(e){this._parentNode=e.parentNode,this.renderer(),this._set(N,P),this._removeLoadingClassNames()},renderer:function(){var e=this;e._renderUI(),e.renderUI(),e._bindUI(),e.bindUI(),e._syncUI(),e.syncUI()},bindUI:D,renderUI:D,syncUI:D,hide:function(){return this.set(f,H)},show:function(){return this.set(f,P)},focus:function(){return this._set(h,P)},blur:function(){return this._set(h,H)},enable:function(){return this.set(c,H)},disable:function(){return this.set(c,P)},_uiSizeCB:function(e){this.get(m).toggleClass(o(a,"expanded"),e)},_renderBox:function(e){var t=this,n=t.get(m),i=t.get(v),s=t.get(w),o=t.DEF_PARENT_NODE,u=s&&s.get(y)||i.get(y)||n.get(y);s&&!s.compareTo(n)&&!n.inDoc(u)&&s.replace(n),!i.compareTo(n.get(g))&&!i.compareTo(n)&&(n.inDoc(u)&&n.replace(i),i.appendChild(n)),e=e||o&&r.one(o),e?e.appendChild(i):i.inDoc(u)||r.one(E).insert(i,0)},_setBB:function(e){return this._setBox(this.get(x),e,this.BOUNDING_TEMPLATE,!0)},_setCB:function(e){return this.CONTENT_TEMPLATE===null?this.get(v):this._setBox(null,e,this.CONTENT_TEMPLATE,!1)},_defaultBB:function(){var e=this.get(w),t=this.CONTENT_TEMPLATE===null;return e&&t?e:null},_defaultCB:function(e){return this.get(w)||null},_setBox:function(t,n,i,s){return n=r.one(n),n||(n=r.create(i),s?this._bbFromTemplate=!0:this._cbFromTemplate=!0),n.get(x)||n.set(x,t||e.guid()),n},_renderUI:function(){this._renderBoxClassNames(),this._renderBox(this._parentNode)},_renderBoxClassNames:function(){var e=this._getClasses(),t,n=this.get(v),r;n.addClass(o());for(r=e.length-3;r>=0;r--)t=e[r],n.addClass(t.CSS_PREFIX||s(t.NAME.toLowerCase()));this.get(m).addClass(this.getClassName(a))},_removeLoadingClassNames:function(){var e=this.get(v),t=this.get(m),n=this.getClassName(O),r=o(O);e.removeClass(r).removeClass(n),t.removeClass(r).removeClass(n)},_bindUI:function(){this._bindAttrUI(this._UI_ATTRS.BIND),this._bindDOM()},_unbindUI:function(e){this._unbindDOM(e)},_bindDOM:function(){var t=this.get(v).get(y),n=R._hDocFocus;n||(n=R._hDocFocus=t.on("focus",this._onDocFocus,this),n.listeners={count:0}),n.listeners[e.stamp(this,!0)]=!0,n.listeners.count++,I&&(this._hDocMouseDown=t.on("mousedown",this._onDocMouseDown,this))},_unbindDOM:function(t){var n=R._hDocFocus,r=e.stamp(this,!0),i,s=this._hDocMouseDown;n&&(i=n.listeners,i[r]&&(delete i[r],i.count--),i.count===0&&(n.detach(),R._hDocFocus=null)),I&&s&&s.detach()},_syncUI:function(){this._syncAttrUI(this._UI_ATTRS.SYNC)},_uiSetHeight:function(e){this._uiSetDim(d,e),this._uiSizeCB(e!==_&&e!==b)},_uiSetWidth:function(e){this._uiSetDim(p,e)},_uiSetDim:function(e,t){this.get(v).setStyle(e,n.isNumber(t)?t+this.DEF_UNIT:t)},_uiSetVisible:function(e){this.get(v).toggleClass(this.getClassName(l),!e)},_uiSetDisabled:function(e){this.get(v).toggleClass(this.getClassName(c),e)},_uiSetFocused:function(e,t){var n=this.get(v);n.toggleClass(this.getClassName(h),e),t!==B&&(e?n.focus():n.blur())},_uiSetTabIndex:function(e){var t=this.get(v);n.isNumber(e)?t.set(S,e):t.removeAttribute(S)},_onDocMouseDown:function(e){this._domFocus&&this._onDocFocus(e)},_onDocFocus:function(e){var t=R.getByNode(e.target),n=R._active;n&&n!==t&&(n._domFocus=!1,n._set(h,!1,{src:B}),R._active=null),t&&(t._domFocus=!0,t._set(h,!0,{src:B}),R._active=t)},toString:function(){return this.name+"["+this.get(x)+"]"},DEF_UNIT:"px",DEF_PARENT_NODE:null,CONTENT_TEMPLATE:L,BOUNDING_TEMPLATE:L,_guid:function(){return e.guid()},_validTabIndex:function(e){return n.isNumber(e)||n.isNull(e)},_bindAttrUI:function(e){var t,n=e.length;for(t=0;t<n;t++)this.after(e[t]+A,this._setAttrUI)},_syncAttrUI:function(e){var t,n=e.length,r;for(t=0;t<n;t++)r=e[t],this[M+u(r)](this.get(r))},_setAttrUI:function(e){e.target===this&&this[M+u(e.attrName
+)](e.newVal,e.src)},_strSetter:function(t){return e.merge(this.get(k),t)},getString:function(e){return this.get(k)[e]},getStrings:function(){return this.get(k)},_UI_ATTRS:{BIND:F,SYNC:F}}),e.Widget=R},"3.16.0",{requires:["attribute","base-base","base-pluginhost","classnamemanager","event-focus","node-base","node-style"],skinnable:!0});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-htmlparser",function(e,t){var n=e.Widget,r=e.Node,i=e.Lang,s="srcNode",o="contentBox";n.HTML_PARSER={},n._buildCfg={aggregates:["HTML_PARSER"]},n.ATTRS[s]={value:null,setter:r.one,getter:"_getSrcNode",writeOnce:!0},e.mix(n.prototype,{_getSrcNode:function(e){return e||this.get(o)},_preAddAttrs:function(e,t,n){var r={id:e.id,boundingBox:e.boundingBox,contentBox:e.contentBox,srcNode:e.srcNode};this.addAttrs(r,t,n),delete e.boundingBox,delete e.contentBox,delete e.srcNode,delete e.id,this._applyParser&&this._applyParser(t)},_applyParsedConfig:function(t,n,r){return r?e.mix(n,r,!1):n},_applyParser:function(t){var n=this,r=this._getNodeToParse(),s=n._getHtmlParser(),o,u;s&&r&&e.Object.each(s,function(e,t,s){u=null,i.isFunction(e)?u=e.call(n,r):i.isArray(e)?(u=r.all(e[0]),u.isEmpty()&&(u=null)):u=r.one(e),u!==null&&u!==undefined&&(o=o||{},o[t]=u)}),t=n._applyParsedConfig(r,t,o)},_getNodeToParse:function(){var e=this.get("srcNode");return this._cbFromTemplate?null:e},_getHtmlParser:function(){var t=this._getClasses(),n={},r,i;for(r=t.length-1;r>=0;r--)i=t[r].HTML_PARSER,i&&e.mix(n,i,!0);return n}})},"3.16.0",{requires:["widget-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-skin",function(e,t){var n="boundingBox",r="contentBox",i="skin",s=e.ClassNameManager.getClassName;e.Widget.prototype.getSkinName=function(e){var t=this.get(r)||this.get(n),o,u;return e=e||s(i,""),u=new RegExp("\\b"+e+"(\\S+)"),t&&t.ancestor(function(e){return o=e.get("className").match(u),o}),o?o[1]:null}},"3.16.0",{requires:["widget-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-uievents",function(e,t){var n="boundingBox",r=e.Widget,i="render",s=e.Lang,o=":",u=e.Widget._uievts=e.Widget._uievts||{};e.mix(r.prototype,{_destroyUIEvents:function(){var t=e.stamp(this,!0);e.each(u,function(n,r){n.instances[t]&&(delete n.instances[t],e.Object.isEmpty(n.instances)&&(n.handle.detach(),u[r]&&delete u[r]))})},UI_EVENTS:e.Node.DOM_EVENTS,_getUIEventNode:function(){return this.get(n)},_createUIEvent:function(t){var n=this._getUIEventNode(),i=e.stamp(n)+t,s=u[i],o;s||(o=n.delegate(t,function(e){var t=r.getByNode(this);t&&t._filterUIEvent(e)&&t.fire(e.type,{domEvent:e})},"."+e.Widget.getClassName()),u[i]=s={instances:{},handle:o}),s.instances[e.stamp(this)]=1},_filterUIEvent:function(e){return e.currentTarget.compareTo(e.container)||e.container.compareTo(this._getUIEventNode())},_getUIEvent:function(e){if(s.isString(e)){var t=this.parseType(e)[1],n,r;return t&&(n=t.indexOf(o),n>-1&&(t=t.substring(n+o.length)),this.UI_EVENTS[t]&&(r=t)),r}},_initUIEvent:function(e){var t=this._getUIEvent(e),n=this._uiEvtsInitQueue||{};t&&!n[t]&&(this._uiEvtsInitQueue=n[t]=1,this.after(i,function(){this._createUIEvent(t),delete this._uiEvtsInitQueue[t]}))},on:function(e){return this._initUIEvent(e),r.superclass.on.apply(this,arguments)},publish:function(e,t){var n=this._getUIEvent(e);return n&&t&&t.defaultFn&&this._initUIEvent(n),r.superclass.publish.apply(this,arguments)}},!0)},"3.16.0",{requires:["node-event-delegate","widget-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("base-build",function(e,t){function f(e,t,n){n[e]&&(t[e]=(t[e]||[]).concat(n[e]))}function l(e,t,n){n._ATTR_CFG&&(t._ATTR_CFG_HASH=null,f.apply(null,arguments))}function c(e,t,r){n.modifyAttrs(t,r.ATTRS)}var n=e.BaseCore,r=e.Base,i=e.Lang,s="initializer",o="destructor",u=["_PLUG","_UNPLUG"],a;r._build=function(t,n,i,u,a,f){var l=r._build,c=l._ctor(n,f),h=l._cfg(n,f,i),p=l._mixCust,d=c._yuibuild.dynamic,v,m,g,y,b,w;for(v=0,m=i.length;v<m;v++)g=i[v],y=g.prototype,b=y[s],w=y[o],delete y[s],delete y[o],e.mix(c,g,!0,null,1),p(c,g,h),b&&(y[s]=b),w&&(y[o]=w),c._yuibuild.exts.push(g);return u&&e.mix(c.prototype,u,!0),a&&(e.mix(c,l._clean(a,h),!0),p(c,a,h)),c.prototype.hasImpl=l._impl,d&&(c.NAME=t,c.prototype.constructor=c,c.modifyAttrs=n.modifyAttrs),c},a=r._build,e.mix(a,{_mixCust:function(t,n,r){var s,o,u,a,f,l;r&&(s=r.aggregates,o=r.custom,u=r.statics),u&&e.mix(t,n,!0,u);if(s)for(l=0,f=s.length;l<f;l++)a=s[l],!t.hasOwnProperty(a)&&n.hasOwnProperty(a)&&(t[a]=i.isArray(n[a])?[]:{}),e.aggregate(t,n,!0,[a]);if(o)for(l in o)o.hasOwnProperty(l)&&o[l](l,t,n)},_tmpl:function(t){function n(){n.superclass.constructor.apply(this,arguments)}return e.extend(n,t),n},_impl:function(e){var t=this._getClasses(),n,r,i,s,o,u;for(n=0,r=t.length;n<r;n++){i=t[n];if(i._yuibuild){s=i._yuibuild.exts,o=s.length;for(u=0;u<o;u++)if(s[u]===e)return!0}}return!1},_ctor:function(e,t){var n=t&&!1===t.dynamic?!1:!0,r=n?a._tmpl(e):e,i=r._yuibuild;return i||(i=r._yuibuild={}),i.id=i.id||null,i.exts=i.exts||[],i.dynamic=n,r},_cfg:function(t,n,r){var i=[],s={},o=[],u,a=n&&n.aggregates,f=n&&n.custom,l=n&&n.statics,c=t,h,p;while(c&&c.prototype)u=c._buildCfg,u&&(u.aggregates&&(i=i.concat(u.aggregates)),u.custom&&e.mix(s,u.custom,!0),u.statics&&(o=o.concat(u.statics))),c=c.superclass?c.superclass.constructor:null;if(r)for(h=0,p=r.length;h<p;h++)c=r[h],u=c._buildCfg,u&&(u.aggregates&&(i=i.concat(u.aggregates)),u.custom&&e.mix(s,u.custom,!0),u.statics&&(o=o.concat(u.statics)));return a&&(i=i.concat(a)),f&&e.mix(s,n.cfgBuild,!0),l&&(o=o.concat(l)),{aggregates:i,custom:s,statics:o}},_clean:function(t,n){var r,i,s,o=e.merge(t),u=n.aggregates,a=n.custom;for(r in a)o.hasOwnProperty(r)&&delete o[r];for(i=0,s=u.length;i<s;i++)r=u[i],o.hasOwnProperty(r)&&delete o[r];return o}}),r.build=function(e,t,n,r){return a(e,t,n,null,null,r)},r.create=function(e,t,n,r,i){return a(e,t,n,r,i)},r.mix=function(e,t){return e._CACHED_CLASS_DATA&&(e._CACHED_CLASS_DATA=null),a(null,e,t,null,null,{dynamic:!1})},n._buildCfg={aggregates:u.concat(),custom:{ATTRS:c,_ATTR_CFG:l,_NON_ATTRS_CFG:f}},r._buildCfg={aggregates:u.concat(),custom:{ATTRS:c,_ATTR_CFG:l,_NON_ATTRS_CFG:f}}},"3.16.0",{requires:["base-base"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-stdmod",function(e,t){function H(e){}var n=e.Lang,r=e.Node,i=e.UA,s=e.Widget,o="",u="hd",a="bd",f="ft",l="header",c="body",h="footer",p="fillHeight",d="stdmod",v="Node",m="Content",g="firstChild",y="childNodes",b="ownerDocument",w="contentBox",E="height",S="offsetHeight",x="auto",T="headerContentChange",N="bodyContentChange",C="footerContentChange",k="fillHeightChange",L="heightChange",A="contentUpdate",O="renderUI",M="bindUI",_="syncUI",D="_applyParsedConfig",P=e.Widget.UI_SRC;H.HEADER=l,H.BODY=c,H.FOOTER=h,H.AFTER="after",H.BEFORE="before",H.REPLACE="replace";var B=H.HEADER,j=H.BODY,F=H.FOOTER,I=B+m,q=F+m,R=j+m;H.ATTRS={headerContent:{value:null},footerContent:{value:null},bodyContent:{value:null},fillHeight:{value:H.BODY,validator:function(e){return this._validateFillHeight(e)}}},H.HTML_PARSER={headerContent:function(e){return this._parseStdModHTML(B)},bodyContent:function(e){return this._parseStdModHTML(j)},footerContent:function(e){return this._parseStdModHTML(F)}},H.SECTION_CLASS_NAMES={header:s.getClassName(u),body:s.getClassName(a),footer:s.getClassName(f)},H.TEMPLATES={header:'<div class="'+H.SECTION_CLASS_NAMES[B]+'"></div>',body:'<div class="'+H.SECTION_CLASS_NAMES[j]+'"></div>',footer:'<div class="'+H.SECTION_CLASS_NAMES[F]+'"></div>'},H.prototype={initializer:function(){this._stdModNode=this.get(w),e.before(this._renderUIStdMod,this,O),e.before(this._bindUIStdMod,this,M),e.before(this._syncUIStdMod,this,_)},_syncUIStdMod:function(){var e=this._stdModParsed;(!e||!e[I])&&this._uiSetStdMod(B,this.get(I)),(!e||!e[R])&&this._uiSetStdMod(j,this.get(R)),(!e||!e[q])&&this._uiSetStdMod(F,this.get(q)),this._uiSetFillHeight(this.get(p))},_renderUIStdMod:function(){this._stdModNode.addClass(s.getClassName(d)),this._renderStdModSections(),this.after(T,this._afterHeaderChange),this.after(N,this._afterBodyChange),this.after(C,this._afterFooterChange)},_renderStdModSections:function(){n.isValue(this.get(I))&&this._renderStdMod(B),n.isValue(this.get(R))&&this._renderStdMod(j),n.isValue(this.get(q))&&this._renderStdMod(F)},_bindUIStdMod:function(){this.after(k,this._afterFillHeightChange),this.after(L,this._fillHeight),this.after(A,this._fillHeight)},_afterHeaderChange:function(e){e.src!==P&&this._uiSetStdMod(B,e.newVal,e.stdModPosition)},_afterBodyChange:function(e){e.src!==P&&this._uiSetStdMod(j,e.newVal,e.stdModPosition)},_afterFooterChange:function(e){e.src!==P&&this._uiSetStdMod(F,e.newVal,e.stdModPosition)},_afterFillHeightChange:function(e){this._uiSetFillHeight(e.newVal)},_validateFillHeight:function(e){return!e||e==H.BODY||e==H.HEADER||e==H.FOOTER},_uiSetFillHeight:function(e){var t=this.getStdModNode(e),n=this._currFillNode;n&&t!==n&&n.setStyle(E,o),t&&(this._currFillNode=t),this._fillHeight()},_fillHeight:function(){if(this.get(p)){var e=this.get(E);e!=o&&e!=x&&this.fillHeight(this.getStdModNode(this.get(p)))}},_uiSetStdMod:function(e,t,r){if(n.isValue(t)){var i=this.getStdModNode(e,!0);this._addStdModContent(i,t,r),this.set(e+m,this._getStdModContent(e),{src:P})}else this._eraseStdMod(e);this.fire(A)},_renderStdMod:function(e){var t=this.get(w),n=this._findStdModSection(e);return n||(n=this._getStdModTemplate(e)),this._insertStdModSection(t,e,n),this[e+v]=n,this[e+v]},_eraseStdMod:function(e){var t=this.getStdModNode(e);t&&(t.remove(!0),delete this[e+v])},_insertStdModSection:function(e,t,n){var r=e.get(g);if(t===F||!r)e.appendChild(n);else if(t===B)e.insertBefore(n,r);else{var i=this[F+v];i?e.insertBefore(n,i):e.appendChild(n)}},_getStdModTemplate:function(e){return r.create(H.TEMPLATES[e],this._stdModNode.get(b))},_addStdModContent:function(e,t,n){switch(n){case H.BEFORE:n=0;break;case H.AFTER:n=undefined;break;default:n=H.REPLACE}e.insert(t,n)},_getPreciseHeight:function(e){var t=e?e.get(S):0,n="getBoundingClientRect";if(e&&e.hasMethod(n)){var r=e.invoke(n);r&&(t=r.bottom-r.top)}return t},_findStdModSection:function(e){return this.get(w).one("> ."+H.SECTION_CLASS_NAMES[e])},_parseStdModHTML:function(t){var n=this._findStdModSection(t);return n?(this._stdModParsed||(this._stdModParsed={},e.before(this._applyStdModParsedConfig,this,D)),this._stdModParsed[t+m]=1,n.get("innerHTML")):null},_applyStdModParsedConfig:function(e,t,n){var r=this._stdModParsed;r&&(r[I]=!(I in t)&&I in r,r[R]=!(R in t)&&R in r,r[q]=!(q in t)&&q in r)},_getStdModContent:function(e){return this[e+v]?this[e+v].get(y):null},setStdModContent:function(e,t,n){this.set(e+m,t,{stdModPosition:n})},getStdModNode:function(e,t){var n=this[e+v]||null;return!n&&t&&(n=this._renderStdMod(e)),n},fillHeight:function(e){if(e){var t=this.get(w),r=[this.headerNode,this.bodyNode,this.footerNode],s,o,u=0,a=0,f=!1;for(var l=0,c=r.length;l<c;l++)s=r[l],s&&(s!==e?u+=this._getPreciseHeight(s):f=!0);f&&((i.ie||i.opera)&&e.set(S,0),o=t.get(S)-parseInt(t.getComputedStyle("paddingTop"),10)-parseInt(t.getComputedStyle("paddingBottom"),10)-parseInt(t.getComputedStyle("borderBottomWidth"),10)-parseInt(t.getComputedStyle("borderTopWidth"),10),n.isNumber(o)&&(a=o-u,a>=0&&e.set(S,a)))}}},e.WidgetStdMod=H},"3.16.0",{requires:["base-build","widget"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-position",function(e,t){function d(e){}var n=e.Lang,r=e.Widget,i="xy",s="position",o="positioned",u="boundingBox",a="relative",f="renderUI",l="bindUI",c="syncUI",h=r.UI_SRC,p="xyChange";d.ATTRS={x:{setter:function(e){this._setX(e)},getter:function(){return this._getX()},lazyAdd:!1},y:{setter:function(e){this._setY(e)},getter:function(){return this._getY()},lazyAdd:!1},xy:{value:[0,0],validator:function(e){return this._validateXY(e)}}},d.POSITIONED_CLASS_NAME=r.getClassName(o),d.prototype={initializer:function(){this._posNode=this.get(u),e.after(this._renderUIPosition,this,f),e.after(this._syncUIPosition,this,c),e.after(this._bindUIPosition,this,l)},_renderUIPosition:function(){this._posNode.addClass(d.POSITIONED_CLASS_NAME)},_syncUIPosition:function(){var e=this._posNode;e.getStyle(s)===a&&this.syncXY(),this._uiSetXY(this.get(i))},_bindUIPosition:function(){this.after(p,this._afterXYChange)},move:function(){var e=arguments,t=n.isArray(e[0])?e[0]:[e[0],e[1]];this.set(i,t)},syncXY:function(){this.set(i,this._posNode.getXY(),{src:h})},_validateXY:function(e){return n.isArray(e)&&n.isNumber(e[0])&&n.isNumber(e[1])},_setX:function(e){this.set(i,[e,this.get(i)[1]])},_setY:function(e){this.set(i,[this.get(i)[0],e])},_getX:function(){return this.get(i)[0]},_getY:function(){return this.get(i)[1]},_afterXYChange:function(e){e.src!=h&&this._uiSetXY(e.newVal)},_uiSetXY:function(e){this._posNode.setXY(e)}},e.WidgetPosition=d},"3.16.0",{requires:["base-build","node-screen","widget"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-position-align",function(e,t){function c(e){}var n=e.Lang,r="align",i="alignOn",s="visible",o="boundingBox",u="offsetWidth",a="offsetHeight",f="region",l="viewportRegion";c.ATTRS={align:{value:null},centered:{setter:"_setAlignCenter",lazyAdd:!1,value:!1},alignOn:{value:[],validator:e.Lang.isArray}},c.TL="tl",c.TR="tr",c.BL="bl",c.BR="br",c.TC="tc",c.RC="rc",c.BC="bc",c.LC="lc",c.CC="cc",c.prototype={initializer:function(){this._posNode||e.error("WidgetPosition needs to be added to the Widget, before WidgetPositionAlign is added"),e.after(this._bindUIPosAlign,this,"bindUI"),e.after(this._syncUIPosAlign,this,"syncUI")},_posAlignUIHandles:null,destructor:function(){this._detachPosAlignUIHandles()},_bindUIPosAlign:function(){this.after("alignChange",this._afterAlignChange),this.after("alignOnChange",this._afterAlignOnChange),this.after("visibleChange",this._syncUIPosAlign)},_syncUIPosAlign:function(){var e=this.get(r);this._uiSetVisiblePosAlign(this.get(s)),e&&this._uiSetAlign(e.node,e.points)},align:function(e,t){return arguments.length?this.set(r,{node:e,points:t}):this._syncUIPosAlign(),this},centered:function(e){return this.align(e,[c.CC,c.CC])},_setAlignCenter:function(e){return e&&this.set(r,{node:e===!0?null:e,points:[c.CC,c.CC]}),e},_uiSetAlign:function(t,r){if(!n.isArray(r)||r.length!==2){e.error("align: Invalid Points Arguments");return}var i=this._getRegion(t),s,o,u;if(!i)return;s=r[0],o=r[1];switch(o){case c.TL:u=[i.left,i.top];break;case c.TR:u=[i.right,i.top];break;case c.BL:u=[i.left,i.bottom];break;case c.BR:u=[i.right,i.bottom];break;case c.TC:u=[i.left+Math.floor(i.width/2),i.top];break;case c.BC:u=[i.left+Math.floor(i.width/2),i.bottom];break;case c.LC:u=[i.left,i.top+Math.floor(i.height/2)];break;case c.RC:u=[i.right,i.top+Math.floor(i.height/2)];break;case c.CC:u=[i.left+Math.floor(i.width/2),i.top+Math.floor(i.height/2)];break;default:}u&&this._doAlign(s,u[0],u[1])},_uiSetVisiblePosAlign:function(e){e?this._attachPosAlignUIHandles():this._detachPosAlignUIHandles()},_attachPosAlignUIHandles:function(){if(this._posAlignUIHandles)return;var t=this.get(o),n=e.bind(this._syncUIPosAlign,this),r=[];e.Array.each(this.get(i),function(i){var s=i.eventName,o=e.one(i.node)||t;s&&r.push(o.on(s,n))}),this._posAlignUIHandles=r},_detachPosAlignUIHandles:function(){var t=this._posAlignUIHandles;t&&((new e.EventHandle(t)).detach(),this._posAlignUIHandles=null)},_doAlign:function(e,t,n){var r=this._posNode,i;switch(e){case c.TL:i=[t,n];break;case c.TR:i=[t-r.get(u),n];break;case c.BL:i=[t,n-r.get(a)];break;case c.BR:i=[t-r.get(u),n-r.get(a)];break;case c.TC:i=[t-r.get(u)/2,n];break;case c.BC:i=[t-r.get(u)/2,n-r.get(a)];break;case c.LC:i=[t,n-r.get(a)/2];break;case c.RC:i=[t-r.get(u),n-r.get(a)/2];break;case c.CC:i=[t-r.get(u)/2,n-r.get(a)/2];break;default:}i&&this.move(i)},_getRegion:function(t){var n;return t?(t=e.Node.one(t),t&&(n=t.get(f))):n=this._posNode.get(l),n},_afterAlignChange:function(e){var t=e.newVal;t&&this._uiSetAlign(t.node,t.points)},_afterAlignOnChange:function(e){this._detachPosAlignUIHandles(),this.get(s)&&this._attachPosAlignUIHandles()}},e.WidgetPositionAlign=c},"3.16.0",{requires:["widget-position"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-stack",function(e,t){function O(e){}var n=e.Lang,r=e.UA,i=e.Node,s=e.Widget,o="zIndex",u="shim",a="visible",f="boundingBox",l="renderUI",c="bindUI",h="syncUI",p="offsetWidth",d="offsetHeight",v="parentNode",m="firstChild",g="ownerDocument",y="width",b="height",w="px",E="shimdeferred",S="shimresize",x="visibleChange",T="widthChange",N="heightChange",C="shimChange",k="zIndexChange",L="contentUpdate",A="stacked";O.ATTRS={shim:{value:r.ie==6},zIndex:{value:0,setter:"_setZIndex"}},O.HTML_PARSER={zIndex:function(e){return this._parseZIndex(e)}},O.SHIM_CLASS_NAME=s.getClassName(u),O.STACKED_CLASS_NAME=s.getClassName(A),O.SHIM_TEMPLATE='<iframe class="'+O.SHIM_CLASS_NAME+'" frameborder="0" title="Widget Stacking Shim" src="javascript:false" tabindex="-1" role="presentation"></iframe>',O.prototype={initializer:function(){this._stackNode=this.get(f),this._stackHandles={},e.after(this._renderUIStack,this,l),e.after(this._syncUIStack,this,h),e.after(this._bindUIStack,this,c)},_syncUIStack:function(){this._uiSetShim(this.get(u)),this._uiSetZIndex(this.get(o))},_bindUIStack:function(){this.after(C,this._afterShimChange),this.after(k,this._afterZIndexChange)},_renderUIStack:function(){this._stackNode.addClass(O.STACKED_CLASS_NAME)},_parseZIndex:function(e){var t;return!e.inDoc()||e.getStyle("position")==="static"?t="auto":t=e.getComputedStyle("zIndex"),t==="auto"?null:t},_setZIndex:function(e){return n.isString(e)&&(e=parseInt(e,10)),n.isNumber(e)||(e=0),e},_afterShimChange:function(e){this._uiSetShim(e.newVal)},_afterZIndexChange:function(e){this._uiSetZIndex(e.newVal)},_uiSetZIndex:function(e){this._stackNode.setStyle(o,e)},_uiSetShim:function(e){e?(this.get(a)?this._renderShim():this._renderShimDeferred(),r.ie==6&&this._addShimResizeHandlers()):this._destroyShim()},_renderShimDeferred:function(){this._stackHandles[E]=this._stackHandles[E]||[];var e=this._stackHandles[E],t=function(e){e.newVal&&this._renderShim()};e.push(this.on(x,t))},_addShimResizeHandlers:function(){this._stackHandles[S]=this._stackHandles[S]||[];var e=this.sizeShim,t=this._stackHandles[S];t.push(this.after(x,e)),t.push(this.after(T,e)),t.push(this.after(N,e)),t.push(this.after(L,e))},_detachStackHandles:function(e){var t=this._stackHandles[e],n;if(t&&t.length>0)while(n=t.pop())n.detach()},_renderShim:function(){var e=this._shimNode,t=this._stackNode;e||(e=this._shimNode=this._getShimTemplate(),t.insertBefore(e,t.get(m)),this._detachStackHandles(E),this.sizeShim())},_destroyShim:function(){this._shimNode&&(this._shimNode.get(v).removeChild(this._shimNode),this._shimNode=null,this._detachStackHandles(E),this._detachStackHandles(S))},sizeShim:function(){var e=this._shimNode,t=this._stackNode;e&&r.ie===6&&this.get(a)&&(e.setStyle(y,t.get(p)+w),e.setStyle(b,t.get(d)+w))},_getShimTemplate:function(){return i.create(O.SHIM_TEMPLATE,this._stackNode.get(g))}},e.WidgetStack=O},"3.16.0",{requires:["base-build","widget"],skinnable:!0});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("widget-position-constrain",function(e,t){function m(e){}var n="constrain",r="constrain|xyChange",i="constrainChange",s="preventOverlap",o="align",u="",a="bindUI",f="xy",l="x",c="y",h=e.Node,p="viewportRegion",d="region",v;m.ATTRS={constrain:{value:null,setter:"_setConstrain"},preventOverlap:{value:!1}},v=m._PREVENT_OVERLAP={x:{tltr:1,blbr:1,brbl:1,trtl:1},y:{trbr:1,tlbl:1,bltl:1,brtr:1}},m.prototype={initializer:function(){this._posNode||e.error("WidgetPosition needs to be added to the Widget, before WidgetPositionConstrain is added"),e.after(this._bindUIPosConstrained,this,a)},getConstrainedXY:function(e,t){t=t||this.get(n);var r=this._getRegion(t===!0?null:t),i=this._posNode.get(d);return[this._constrain(e[0],l,i,r),this._constrain(e[1],c,i,r)]},constrain:function(e,t){var r,i,s=t||this.get(n);s&&(r=e||this.get(f),i=this.getConstrainedXY(r,s),(i[0]!==r[0]||i[1]!==r[1])&&this.set(f,i,{constrained:!0}))},_setConstrain:function(e){return e===!0?e:h.one(e)},_constrain:function(e,t,n,r){if(r){this.get(s)&&(e=this._preventOverlap(e,t,n,r));var i=t==l,o=i?r.width:r.height,u=i?n.width:n.height,a=i?r.left:r.top,f=i?r.right-u:r.bottom-u;if(e<a||e>f)u<o?e<a?e=a:e>f&&(e=f):e=a}return e},_preventOverlap:function(e,t,n,r){var i=this.get(o),s=t===l,a,f,c,h,p,d;return i&&i.points&&v[t][i.points.join(u)]&&(f=this._getRegion(i.node),f&&(a=s?n.width:n.height,c=s?f.left:f.top,h=s?f.right:f.bottom,p=s?f.left-r.left:f.top-r.top,d=s?r.right-f.right:r.bottom-f.bottom),e>c?d<a&&p>a&&(e=c-a):p<a&&d>a&&(e=h)),e},_bindUIPosConstrained:function(){this.after(i,this._afterConstrainChange),this._enableConstraints(this.get(n))},_afterConstrainChange:function(e){this._enableConstraints(e.newVal)},_enableConstraints:function(e){e?(this.constrain(),this._cxyHandle=this._cxyHandle||this.on(r,this._constrainOnXYChange)):this._cxyHandle&&(this._cxyHandle.detach(),this._cxyHandle=null)},_constrainOnXYChange:function(e){e.constrained||(e.newVal=this.getConstrainedXY(e.newVal))},_getRegion:function(e){var t;return e?(e=h.one(e),e&&(t=e.get(d))):t=this._posNode.get(p),t}},e.WidgetPositionConstrain=m},"3.16.0",{requires:["widget-position"]});
+
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("overlay",function(e,t){e.Overlay=e.Base.create("overlay",e.Widget,[e.WidgetStdMod,e.WidgetPosition,e.WidgetStack,e.WidgetPositionAlign,e.WidgetPositionConstrain])},"3.16.0",{requires:["widget","widget-stdmod","widget-position","widget-position-align","widget-stack","widget-position-constrain"],skinnable:!0});
+
+;/*jshint white:true, unused:true*/
+/**
+ * Dialog 模块
+ * @module mt-dialog
+ */
+M.add('mt-dialog', function (Y) {
+    var isIE =  Y.UA.ie,
+        isIE6 = (isIE === 6),
+        isStr = Y.Lang.isString,
+        isNum = Y.Lang.isNumber;
+
+    var $Util = Y.mt.util,
+        $Key = Y.mt.macro.key;
+    var DIALOG_STATUS = {
+        CLOSE: 'close',
+        OPEN: 'open'
+    };
+
+    /**
+     * 弹窗类
+     *
+     * 如果想实现窗口中表单项内容的回填功能，可以在 new 时判断是否已经生成过实例。
+     * 若有，则直接调用实例的 `open` 方法，可以恢复上次关闭时的窗口状态
+     * @class Dialog
+     * @namespace mt
+     * @constructor
+     * @param {Object} config 弹窗配置
+     * @example
+        var dialog = new Y.mt.Dialog({
+            id: Email._ID,
+            width: '450px',
+            title: '绑定邮箱',
+            content: ndMarkup.getHTML()
+        });
+     **/
+    function Dialog() {
+        var config = arguments[0],
+            ins = Dialog._instances[config.id];
+
+        if (config.useAnim) {
+            config.useAnim = Y.mt.UIUtil.isSupportAnimation().animation && Y.mt.UIUtil.isSupportAnimation().transform;
+        } else {
+            config.useAnim = false;
+        }
+
+        if (ins instanceof Dialog) {
+            ins.setAttrs(config);
+            return ins;
+        }
+
+        Dialog._instances[config.id] = this;
+        Dialog.superclass.constructor.apply(this, arguments);
+        this.config = config;
+        return this;
+    }
+
+    /**
+     * 存储所有弹窗实例。打开一个曾经弹出的窗口，不会导致新建一个实例，只是替换了配置
+     * @property _instances
+     * @private
+     * @static
+     * @type {String}
+     */
+    Dialog._instances = {};
+    /**
+     * 类名，用来作为事件前缀
+     * @property NAME
+     * @static
+     * @type {String}
+     */
+    Dialog.NAME = 'mt-dialog';
+    /**
+     * 蒙层 ID
+     * @property MASK_ID
+     * @static
+     * @type {String}
+     */
+    Dialog.MASK_ID = 'mt-overlay-mask';
+    /**
+     * IE6 下蒙层盖不住下面的内容，需要用 iframe 来遮挡
+     * @property IFRAME_ID
+     * @static
+     * @type {String}
+     */
+    Dialog.IFRAME_ID = 'mt-overlay-iframe';
+    /**
+     * dialog 周围的虚边样式。示例可见购买页中的登录弹窗
+     * @property UNDERLAY_CLASS
+     * @static
+     * @type {String}
+     */
+    Dialog.UNDERLAY_CLASS = 'mt-overlay-underlay';
+    /**
+     * 弹窗容器的样式
+     * @property OVERLAY_CONTAINER_CLASS
+     * @static
+     * @type {String}
+     */
+    Dialog.OVERLAY_CONTAINER_CLASS = 'mt-overlay-container';
+    /**
+     * 弹窗有标题时，标题的 html 模板
+     * @property TITLE_TPL
+     * @static
+     * @type {String}
+     */
+    Dialog.TITLE_TPL = '<h3 class="head">{title}<span class="close">关闭</span></h3><div class="body"><p class="error" style="display:none">&nbsp;</p>{content}</div>';
+    /**
+     * 弹窗无标题时关闭图标的 html 模板
+     * @property NO_TITLE_TPL
+     * @static
+     * @type {String}
+     */
+    Dialog.NO_TITLE_TPL = '<a class="close no-title" hidefocus="true">关闭</a><div class="body"><p class="error" style="display:none">&nbsp;</p>{content}</div>';
+    /**
+     * 属性配置
+     * @property ATTRS
+     * @static
+     * @type {Object}
+     */
+    Dialog.ATTRS = {
+        /**
+         * 窗口 ID
+         * @attribute id
+         * @type {String}
+         * @default null
+         */
+        id: {
+            value: null,
+            writeOnce: true
+        },
+        /**
+         * 窗口宽度
+         * @attribute width
+         * @type {Number|String}
+         * @default '400px'
+         * @example
+         *  dialog.set('width', 500);
+         *  dialog.set('width', '10em');
+         */
+        width: {
+            value: '420px',
+            setter: '_setWidth'
+        },
+        /**
+         * 窗口 z-index, 由于弹窗的优先级很高，zIndex需要保证全局最大
+         * @attribute zIndex
+         * @type {Number}
+         * @default 102
+         */
+        zIndex: {
+            value: 102
+        },
+        /**
+         * dialog 的对齐配置。详见<a href="http://yuilibrary.com/yui/docs/api/classes/Overlay.html">yuilibrary</a>
+         * @attribute align
+         * @type {String}
+         * @default null
+         */
+        align: {
+            value: null
+        },
+        /**
+         * 是否居中对齐
+         * @attribute centered
+         * @type {Boolean}
+         * @default true
+         */
+        centered: {
+            value: true
+        },
+        /**
+         * 是否使用模态
+         * @attribute modal
+         * @type {Boolean}
+         * @default true
+         */
+        modal: {
+            value: true
+        },
+        /**
+         * 是否自动隐藏 autoHide的值为延时时间，单位为s
+         * @attribute autoHide
+         * @type {Boolean|Number}
+         * @default false
+         */
+        autoHide: {
+            value: false
+        },
+        /**
+         * 窗口标题
+         * @attribute title
+         * @type {String}
+         * @default ''
+         */
+        title: {
+            value: ''
+        },
+        /**
+         * 窗口内容
+         * @attribute content
+         * @type {String}
+         * @default ''
+         */
+        content: {
+            value: ''
+        },
+        /**
+         * 是否使用动画
+         */
+        useAnim: {
+            value: false
+        }
+    };
+
+    var proto = {
+        /**
+         * 初始化
+         * @method initializer
+         */
+        initializer: function () {
+            var instance = this;
+            instance._timer = null;
+            instance._dialog = null;
+            instance._scrollHandle = null;
+            instance._escHandle = null;
+
+            instance.publish('open', {
+                emitFacade: true,
+                defaultFn: instance._defOpenFn
+            });
+            instance.publish('close', {
+                emitFacade: true,
+                defaultFn: instance._defCloseFn
+            });
+
+            instance._initDialog();
+            instance._bind();
+        },
+        /**
+         * 析构
+         * @method destructor
+         */
+        destructor: function () {
+            var instance = this,
+                ndDoc = Y.one(Y.config.doc),
+                ndIframe = ndDoc.one('#' + Dialog.IFRAME_ID),
+                ndMask = ndDoc.one('#' + Dialog.MASK_ID);
+
+            instance._dialog.destroy();
+            instance._escHandle.detach();
+            if (instance._scrollHandle) {
+                instance._scrollHandle.detach();
+            }
+
+            Y.one('#' + instance.get('id')).destroy(true);
+            if (ndIframe) ndIframe.destroy(true);
+            if (ndMask) ndMask.destroy(true);
+            delete Dialog._instances[instance.get('id')];
+        },
+        /**
+         * 初始化dialog，创建Overlay实例
+         * @method _initDialog
+         * @private
+         */
+        _initDialog: function () {
+            var instance = this;
+            var conf = instance.getAttrs(['width', 'zIndex', 'align', 'centered']);
+            // 初始化的dialog默认不显示，open时才显示
+            conf.visible = false;
+            // 创建Overlay的实例
+            instance._dialog = new Y.Overlay(conf);
+            instance._initOverlay();
+        },
+        /**
+         * 绑定事件
+         * @method _bind
+         * @private
+         */
+        _bind: function () {
+            var instance = this;
+            instance.on('widthChange', function (e) {
+                this._dialog.set('width', e.newVal);
+                // 在IE6中需要重新设置underlay层
+                instance.resizeUnderlay();
+            });
+            instance.on('titleChange', function (e) {
+                instance._fillTemplate({ title: e.newVal });
+            });
+            instance.on('contentChange', function (e) {
+                instance._fillTemplate({ content: e.newVal });
+            });
+            instance.on('centeredChange', function (e) {
+                this._dialog.set('centered', e.newVal);
+            });
+            instance.on('alignChange', function (e) {
+                this._dialog.set('align', e.newVal);
+            });
+            instance.on('autoHideChange', function (e) {
+                if (e.newVal) {
+                    instance._timer = window.setTimeout(function () {
+                        instance.close();
+                    }, parseInt(e.newVal, 10) * 1000);
+                }
+            });
+
+            // ESC 关闭窗口
+            instance._escHandle = Y.one('body').on('keydown', function (e) {
+                if (e.keyCode === $Key.ESC && instance._status === DIALOG_STATUS.OPEN) {
+                    instance.close();
+                }
+            });
+            // 监听关闭动作
+            Y.one('#' + instance.get('id')).delegate('click', function () {
+                instance.close();
+            }, '.close');
+        },
+        /**
+         * 填充模板
+         * @method _fillTemplate
+         * @param {Object} config 窗口参数配置
+         * @private
+         */
+        _fillTemplate: function (config) {
+            var instance = this,
+                title,
+                content,
+                htmlStr;
+
+            config = config || {};
+            title = config.title || instance.get('title');
+            content = config.content || instance.get('content');
+            if (!title && !content) return;
+
+            // title不为空时使用TITLE_TPL 模板，否则使用NO_TITLE_TPL
+            if (title) {
+                htmlStr = Y.Lang.sub(Dialog.TITLE_TPL, {
+                    title: title,
+                    content: content
+                });
+            } else {
+                htmlStr = Y.Lang.sub(Dialog.NO_TITLE_TPL, {
+                    content: content
+                });
+            }
+
+            instance._dialog.set('bodyContent', '<div class="mt-dialog">' + htmlStr + '</div>');
+            if (instance.get('centered')) {
+                instance.set('centered', true);
+            }
+            // width 在IE6中需要重新设置underlay层
+            instance.resizeUnderlay();
+        },
+        /**
+         * 处理蒙层
+         * @method _initOverlay
+         * @private
+         */
+        _initOverlay: function () {
+            var instance = this,
+                modal = instance.get('modal'),
+                zIndex = instance.get('zIndex'),
+                dialogId = instance.get('id'),
+                dialog = instance._dialog,
+                ndDoc = Y.one(document.body),
+                ndIframe = ndDoc.one('#' + Dialog.IFRAME_ID),
+                ndMask = ndDoc.one('#' + Dialog.MASK_ID),
+                ndOverlayContainer;
+
+            if (modal) {
+                // z-index关系应为：0 =< normal < iframe < mask < overlay
+                if (isIE6 && !ndIframe) {
+                    ndIframe = Y.Node.create('<iframe id="' + Dialog.IFRAME_ID + '"></iframe>');
+                    ndDoc.prepend(ndIframe);
+                }
+                if (!ndMask) {
+                    ndMask = Y.Node.create('<div id="' + Dialog.MASK_ID + '"></div>');
+                    if (ndIframe) {
+                        ndIframe.insert(ndMask, 'before');
+                    } else {
+                        ndDoc.prepend(ndMask);
+                    }
+                }
+                if (ndIframe) {
+                    ndIframe.setStyles({
+                        width: ndDoc.get('docWidth'),
+                        height: ndDoc.get('docHeight'),
+                        zIndex: parseInt(zIndex, 10) - 2,
+                        visibility: 'hidden'
+                    });
+                }
+
+                ndMask.setStyles({
+                    width: ndDoc.get('docWidth'),
+                    height: ndDoc.get('docHeight'),
+                    zIndex: parseInt(zIndex, 10) - 1,
+                    visibility: 'hidden'
+                });
+            }
+
+            ndOverlayContainer = Y.Node.create('<div id="' + dialogId + '" class="' + Dialog.OVERLAY_CONTAINER_CLASS + '"></div>');
+            if (ndIframe) {
+                ndIframe.insert(ndOverlayContainer, 'after');
+            } else {
+                ndDoc.prepend(ndOverlayContainer);
+            }
+            // render的目标对象为绝对定位时在IE7出现无法全部隐藏的bug
+            dialog.render(ndOverlayContainer);
+            instance._fillTemplate();
+            // 添加透明边缘
+            if (!ndOverlayContainer.one('.' + Dialog.UNDERLAY_CLASS)) {
+
+                ndOverlayContainer.get('firstChild').append('<div class="' + Dialog.UNDERLAY_CLASS + '"></div>');
+            }
+        },
+        /**
+         * 打开显示dialog
+         * @method open
+         */
+        open: function () {
+            var instance = this,
+                dialogId = instance.get('id');
+            instance.fire('open', { id: dialogId });
+        },
+        /**
+         * dialog open 事件的默认执行函数
+         * @method _defOpenFn
+         * @private
+         */
+        _defOpenFn: function () {
+            var instance = this,
+                dialog = instance._dialog,
+                centered = instance.get('centered'),
+                autoHide = instance.get('autoHide'),
+                ndWin = Y.one(window),
+                ndDoc = Y.one(document),
+                ndIframe = ndDoc.one('#' + Dialog.IFRAME_ID),
+                ndMask = ndDoc.one('#' + Dialog.MASK_ID),
+                dialogId = instance.get('id'),
+                ndOverlayContainer = ndDoc.one('#' + dialogId);
+
+            if (ndIframe) {
+                ndIframe.setStyle('visibility', 'visible');
+            }
+            if (ndMask) {
+                ndMask.setStyles({
+                    width: ndDoc.get('docWidth'),
+                    height: ndDoc.get('docHeight'),
+                    visibility: 'visible'
+                });
+            }
+
+            if (this.get('useAnim')) {
+                setTimeout(function () {
+                    dialog.show();
+                    ndOverlayContainer.one('.mt-dialog').addClass('anim-popup');
+                    ndOverlayContainer.one('.mt-overlay-underlay').addClass('anim-popup');
+                }, 0);
+            } else {
+                dialog.show();
+            }
+            instance._status = DIALOG_STATUS.OPEN;
+
+            // 自动隐藏
+            if (autoHide) {
+                instance.set('autoHide', autoHide);
+            }
+            // 锁定居中
+            if (centered) {
+                instance.set('centered', true);
+                instance._scrollHandle = ndWin.on(['scroll', 'resize'], $Util.throttle(function () {
+                    instance.set('centered', true);
+                }, 100));
+            }
+        },
+        /**
+         * 关闭dialog
+         * @method close
+         */
+        close: function () {
+            var instance = this,
+                dialogId = instance.get('id');
+            instance.fire('close', { id: dialogId });
+        },
+        /**
+         * dialog close 事件的默认执行函数
+         * @method _defCloseFn
+         * @private
+         */
+        _defCloseFn: function () {
+            var instance = this,
+                modal = instance.get('modal'),
+                centered = instance.get('centered'),
+                dialogId = instance.get('id'),
+                dialog = instance._dialog,
+                ndDoc = Y.one(document.body),
+                ndMask = ndDoc.one('#' + Dialog.MASK_ID),
+                ndIframe = ndDoc.one('#' + Dialog.IFRAME_ID),
+                ndOverlayContainer = ndDoc.one('#' + dialogId);
+
+            if (this.get('useAnim')) {
+                ndOverlayContainer.all('.anim-popup').each(function(nd) {
+                    nd.removeClass('anim-popup'); 
+                    nd.addClass('anim-hide-popup');
+                    Y.mt.UIUtil.bindAnimEndEvent(nd, function (e, nd) {
+                        if (e.animationName && e.animationName === 'hide-popup') {
+                            dialog.hide();
+                            nd.removeClass('anim-hide-popup');
+                        }
+                    });
+                });
+            } else {
+                dialog.hide();
+            }
+            instance._status = DIALOG_STATUS.CLOSE;
+
+            if (modal) {
+                ndMask.setStyle('visibility', 'hidden');
+                if (ndIframe) {
+                    ndIframe.setStyle('visibility', 'hidden');
+                }
+            }
+            if (centered && instance._scrollHandle) {
+                instance._scrollHandle.detach();
+            }
+            // 移除监听事件
+            if (ndOverlayContainer) {
+                ndOverlayContainer.all('.close').each(function (nd) {
+                    nd.purge();
+                });
+            }
+            window.clearTimeout(instance._timer);
+            // 关闭回调
+            if (instance.config.onClose) {
+                instance.config.onClose(instance);
+            }
+        },
+        /**
+         * ie6 实现阴影覆盖层时需要指定宽高，如果对话框内容改变则需要重新设置。
+         * 在body里有外部插件（如 widget.Rating）在dialog的open之后渲染，需要再次调用该函数重算underlay的宽高
+         * @method resizeUnderlay
+         */
+        resizeUnderlay: function () {
+            var instance = this,
+                dialogId = instance.get('id'),
+                ndUnderlay,
+                ndParent;
+
+            if (isIE6 || (isIE === 7 && document.compatMode === "BackCompat")) {
+                ndUnderlay = Y.one('#' + dialogId + ' .' + Dialog.UNDERLAY_CLASS);
+                if (!ndUnderlay) return;
+                ndParent = ndUnderlay.ancestor();
+                ndUnderlay.setStyles({
+                    width: parseFloat(ndParent.getComputedStyle('width')) + 12 + 'px',
+                    height: parseFloat(ndParent.getComputedStyle('height')) + 12 + 'px'
+                });
+            }
+        },
+        /**
+         * 获取内部节点
+         * @method one
+         * @param {Selector} selector
+         * @return {Node}
+         */
+        one: function (selector) {
+            return Y.one('#' + this.get('id')).one(selector);
+        },
+        /**
+         * 获取内部节点
+         * @method all
+         * @param {Selector} selector
+         * @return {Node}
+         */
+        all: function (selector) {
+            return Y.one('#' + this.get('id')).all(selector);
+        },
+        /**
+         * 展示错误信息
+         * @method showError
+         * @param {String} error 错误信息内容
+         */
+        showError: function (error) {
+            this.one('.body > .error').setHTML(error).show();
+        },
+        /**
+         * 清除错误信息
+         * @method clearError
+         */
+        clearError: function () {
+            this.one('.body > .error').hide();
+        },
+        /**
+         * 展示结果
+         * @method showResult
+         * @param {Object} o 结果配置
+         * @param {Boolean} isAlert 是否是Alert
+         * @example
+            feedbackDialog.showResult({
+                type: 'success',
+                title: '评价成功！',
+                tip: '获赠<em>' + res.data.point + '</em>积分，<a href="/account/points" target="_blank">查看我的积分&raquo;</a>'
+            });
+         *
+         */
+        showResult: function (o, isAlert) {
+            var DEFAULT_WIDTH = '350px',
+                RESULT_TPL = '<div class="result-box result-box--{className} pngfix"><i></i><h5>{title}</h5>{tip}</div>{extra}',
+                // use table to make vertical align center http://www.feweekly.com/news_letter/contributions/view/142
+                ALERT_TPL = '<div class="result-box result-box--{className} result-box--alert pngfix"><table class="alert-table"><tr><td width="35"><i class="alert-icon"></i></td><td><div class="alert-msg">{tip}</div></td></tr></table></div>',
+                // 常见样式配置
+                defaultConf = {
+                    tip: {
+                        className: 'tip',
+                        title: '',
+                        extra: ''
+                    },
+                    success: {
+                        className: 'success',
+                        title: '操作成功',
+                        extra: ''
+                    },
+                    failure: {
+                        className: 'failure',
+                        title: '操作失败',
+                        extra: ''
+                    }
+                };
+            Y.mix(o, defaultConf[o.type || 'success']);
+            if (o.tip) {
+                o.tip = '<p>' + o.tip + '</p>';
+            } else {
+                o.tip = '';
+                o.className += ' no-tip';
+            }
+            this.setAttrs({
+                width: o.width || DEFAULT_WIDTH,
+                content: Y.Lang.sub(isAlert ? ALERT_TPL : RESULT_TPL, o)
+            });
+        },
+        /**
+         * 设置宽度
+         * @method _setWidth
+         * @private
+         * @param {String|Number} val
+         * @return {String} 宽度
+         */
+        _setWidth: function (val) {
+            if (isStr(val)) return val;
+            if (isNum(val)) return val + 'px';
+            return '420px';
+        }
+    };
+
+    Y.extend(Dialog, Y.Base, proto);
+    Y.mt.Dialog = Dialog;
+},
+//version
+'1.0.0',
+//dependency
+{
+    requires: [
+        'mt-base',
+        'overlay',
+        'node',
+        'base',
+        'mt-uiutil'
+    ]
+});
+
+;/*jshint white:true,unused:true */
+/**
+ * @module www-dialog
+ */
+M.add('www-dialog', function (Y) {
+    var $IO = Y.io,
+        isFunction = Y.Lang.isFunction,
+        trim = Y.Lang.trim,
+        sub = Y.Lang.sub;
+
+    var $Util = Y.mt.util,
+        $Cookie = $Util.Cookie,
+        $Www = Y.mt.www,
+        REG = $Www.REG,
+        Dialog = Y.mt.Dialog,
+        FormChecker = Y.mt.FormChecker;
+
+    Y.namespace('mt.www.Dialog');
+    /**
+     * 对话框
+     * @class Dialog
+     * @namespace mt.www
+     * @static
+     */
+    $Www.Dialog = Y.merge($Www.Dialog, {
+        /**
+         * alert 自定义版, 替换原生alert
+         *
+         * @method alert
+         * @param {Object|String} config
+         * @param {String} config.title 弹窗中醒目内容，如“操作成功”
+         * @param {String} config.tip 弹窗中内容
+         * @param {Number} config.autoHide 弹窗自动隐藏的延迟
+         * @param {Boolean} config.reload 表示关闭时是否刷新当前页
+         * @param {String} title 弹窗的标题
+         */
+        alert: function (config, title) {
+            var Dialog = Y.mt.Dialog,
+                instances = Dialog._instances,
+                alertDialog;
+
+            if (typeof config === 'string') {
+                config = { tip: config };
+            }
+
+            config.id = 'mt-alert-dialog';
+            config.title = title || '';
+            config.type = 'tip';
+
+            // 由于alert是排他的，需要关闭其他dialog
+            Y.each(instances, function (instance) {
+                if (instance._status === 'open') {
+                    instance._needReopen = true;
+                    instance.close();
+                }
+            });
+
+            alertDialog = new Dialog(config);
+
+            alertDialog.open();
+            alertDialog.showResult(config, true);
+
+            if (!config.autoHide) {
+                alertDialog.set('autoHide', config.autoHide);
+            }
+
+            // 如果需要reload，关闭alert之后reload，不需要再重新显示之前隐藏的dialog了
+            if (config.reload) {
+                alertDialog.on('close', function () {
+                    window.location.reload();
+                });
+            } else {
+                // 关闭Alert之后，需要显示之前被关闭的Instance
+                alertDialog.on('close', function () {
+                    Y.each(instances, function (instance) {
+                        if (instance._needReopen) {
+                            instance.open();
+                            delete instance._needReopen;
+                        }
+                    });
+                });
+            }
+
+        },
+
+        /**
+         * 登录弹出框登陆
+         * @method login
+         * @param {Object} [options]
+         * @param {String} [options.galabel]
+         * @param {String} [options.origin] 登录来源
+         * @param {String} [options.loginRef]
+         * @param {String} [options.expiresDate]
+         * @param {String} [options.mobileLogin]
+         * @param {String} [options.normalTip]
+         * @param {String} [options.mobileTip]
+         * @param {String} [options.isTest] ABtest 测试组
+         * @param {Function} callback
+         */
+        login: function (options, callback) {
+            var loginDialog,
+                ndDialog,
+                // @notice 后端取cookie的方式是'www' + 'lr'
+                LOGINREF_COOKIE_NAME = 'wwwlr',
+                LOGIN_DIALOD_ID = "common-login-dialog",
+                UNITIVE_LOGIN_IFRAME_ID = "unitive-login-iframe";
+
+            if (arguments.length === 1 && isFunction(arguments[0])) {
+                callback = arguments[0];
+                options = {};
+            }
+            Y.mix(options, {
+                galabel: 'common/login',
+                origin: 'dialog'
+            });
+            
+            loginDialog = new Dialog({
+                id: LOGIN_DIALOD_ID,
+                title: '登录',
+                width: '440px',
+                content: '<div class="J-content-wrapper" style="height:440px"></div>',
+                useAnim: true
+            });
+
+            loginDialog.open();
+
+            ndDialog = Y.one('#' + LOGIN_DIALOD_ID);
+
+            // 当统一登录功能未加载的时候给对话框添加登录iframe
+            if (!ndDialog.one('#' + UNITIVE_LOGIN_IFRAME_ID)) {
+                appendLoginIframe({
+                    ndWrapper: ndDialog.one('.J-content-wrapper'),
+                    callback: callback,
+                    loginRef: options.loginRef
+                });
+            }
+
+            // 给实例添加设置cookie功能，部分页面会需要多次调用登录框时刷新cookie
+            loginDialog.setCookie = function (loginRef, expiresDate) {
+                expiresDate = expiresDate || $Cookie.getExpiresDate(1, 0, 0);
+                $Cookie.set(LOGINREF_COOKIE_NAME, loginRef, expiresDate, '/', '.' + M.DOMAIN_HOST);
+            };
+
+            if (options.loginRef) {
+                loginDialog.setCookie(options.loginRef, options.expiresDate); // 默认会设置一次cookie
+            }
+
+            sendGA();
+
+            return loginDialog;
+
+            /** 
+             * 添加统一登录iframe
+             * @param config.ndWrapper {Node} 填入iframe的节点容器
+             * @param config.loginRef {String} 登陆成功后跳转链接
+             * @param config.callback {Function} 登陆成功的回调函数
+             */
+            function appendLoginIframe (config) {
+                var loginCallback;
+
+                if (callback) {
+                    loginCallback = callback;
+                } else {
+                    if (config.loginRef) {
+                        // 自定义回调函数，由登陆成功页(主站模板为：account/loginokdialog)调用
+                        loginCallback = function (config) {
+                            if (config.loginRef && config.loginRef !== '') {
+                                location.href = config.loginRef;
+                            } else {
+                                location.reload();
+                            }
+                        };
+                    }
+                }
+
+                /**
+                 * 发送主站登录信息的日志（请求登录JS次数）
+                 * wiki：http://wiki.sankuai.com/pages/viewpage.action?pageId=146744119
+                 */
+                window._mbq('eventlog', 'unitivelogin', 'getjs', 'www');
+
+
+                Y.Get.js('/account/fetchunitiveloginscript', function () {
+                    // 更新passport对象
+                    var passport = window.passport,
+                        env,
+                        initConfig;
+
+                    /**
+                     * 发送主站登录信息的日志（请求JS成功次数）
+                     * wiki：http://wiki.sankuai.com/pages/viewpage.action?pageId=146744119
+                     */
+                    window._mbq('eventlog', 'unitivelogin', 'jsloaded', 'www');
+                    initConfig = {
+                        ndContentWrapper: config.ndWrapper.getDOMNode(),
+                        extraCallback: loginCallback
+                    };
+
+                    if (M.DOMAIN_HOST !== 'meituan.com') {
+                        // 线下开发使用http，测试环境和线上环境则使用https
+                        if (M.DEV === 2) {
+                            env = 'http://www.' + M.DOMAIN_HOST;
+                        } else {
+                            env = M.DOMAIN_HOST;
+                        }
+
+                        initConfig = Y.merge(initConfig, {
+                            env: env
+                        });
+                    }
+
+                    passport.init(initConfig);
+
+                    if (options.plainQueryString) {
+                        passport.login({
+                            plainQueryString: options.plainQueryString
+                        });
+                    } else {
+                        passport.login({
+                            service: 'www',
+                            "continue": 'http://www.' + M.DOMAIN_HOST + '/account/settoken',
+                            origin: options.origin
+                        });
+                    }
+                });
+            }
+
+            function sendGA() {
+                if (window._gaq) {
+                    window._gaq.push(['_trackEvent', 'Dialog', 'view', options.galabel]);
+                }
+            }
+        },
+
+        /**
+         * 绑定邮箱
+         * @class Email
+         * @namespace mt.www.Dialog
+         * @static
+         */
+        Email: {
+            _ID: 'email-bind-dialog',
+            tips: {
+                'type': '请填写邮箱地址',
+                'empty': '请填写邮箱地址',
+                'error': '邮箱格式错误，请重新输入'
+            },
+            /**
+             * 申请绑定
+             * @method
+             */
+            bind: function (isModify, isVerified) {
+                var ndMarkup = Y.one('#email-bind-dialog-markup');
+                if (!ndMarkup) return;
+                var Email = this,
+                    dialog,
+                    tips = Email.tips,
+                    Captcha = $Www.Dialog.Captcha;
+                dialog = new Dialog({
+                    id: Email._ID,
+                    width: '470px',
+                    title: '绑定邮箱',
+                    content: ndMarkup.getHTML()
+                });
+                dialog.open();
+                bindEvent();
+
+                function bindEvent() {
+                    var ndForm = dialog.one('form'),
+                        formchecker,
+                        ndEmail = $Util.field(ndForm, 'email'),
+                        ndCaptcha = $Util.field(ndForm, 'captcha');
+                    Captcha.bindRefreshEvent(ndForm);
+                    formchecker = new FormChecker({
+                        form: ndForm,
+                        fields: {
+                            'email': {
+                                node: ndEmail,
+                                validateFn: checkEmail,
+                                typeTip: tips.type
+                            },
+                            'captcha': {
+                                node: ndCaptcha,
+                                validateFn: Captcha.check,
+                                typeTip: Captcha.tips.type
+                            }
+                        },
+                        tipClass: FormChecker.CLASS_BLOCK_TIP
+                    });
+                    ndForm.on('submit', function (e) {
+                        e.halt();
+                        var ac;
+                        if (isModify) {
+                            ac = '/account/bindemail/modify' + (isVerified ? '/verified' : '');
+                        } else {
+                            ac = '/account/bindemail';
+                        }
+                        $IO(ac, {
+                            method: 'POST',
+                            form: { id: ndForm },
+                            on: {
+                                success: function (id, o) {
+                                    var res = $Util.getEvalRes(o);
+                                    handleBindResult(res);
+                                },
+                                failure: function () {
+                                    var config = {
+                                        type: 'failure',
+                                        tip: '请求失败，请稍候重试',
+                                        autoHide: 3,
+                                        reload: true
+                                    };
+                                    $Www.Dialog.showResult(dialog, config);
+                                }
+                            }
+                        });
+                    });
+
+                    function handleBindResult(res) {
+                        var field;
+                        if (res.status) {
+                            dialog.after('close', function () {
+                                window.location.reload();
+                            });
+                            Email.activate(res.email, res.url);
+                        } else {
+                            if (res.errortype === 'captcha') {
+                                field = formchecker.get('fields').captcha;
+                            } else {
+                                field = formchecker.get('fields').email;
+                            }
+                            formchecker.setErrorTip(field, res.msg);
+                            Captcha.refresh(ndForm);
+                        }
+                    }
+                }
+
+                // 检查Email
+                function checkEmail(nd) {
+                    var email = nd.get('value');
+                    if (email === '') {
+                        return tips.empty;
+                    } else if (!REG.email.test(email)) {
+                        return tips.error;
+                    }
+                    return false;
+                }
+            },
+            /**
+             * 激活邮箱
+             * @method activate
+             * @param {String} email 待激活邮箱
+             * @param {String} url 激活地址
+             *
+             */
+            activate: function (email, url) {
+                var ndMarkup = Y.one('#email-activate-dialog-markup');
+                if (!ndMarkup) return;
+                var Email = this,
+                    dialog;
+                dialog = new Dialog({
+                    id: Email._ID,
+                    width: '470px',
+                    title: '绑定邮箱',
+                    content: sub(ndMarkup.getHTML(), {
+                        email: email,
+                        url: url
+                    })
+                });
+                dialog.open();
+            }
+        },
+        /**
+         * 密码相关
+         *
+         */
+        Password: {
+            tips: {
+                thesamepwd: '当前密码和新密码一致，请重新输入',
+                currentpwd: '请输入当前密码',
+                emptypwd: '请输入新密码',
+                whitespace: '密码中不能包含空格',
+                password: '建议使用与您其它账户不同的密码',
+                emptypwd2: '请再次输入新密码',
+                password2: '请再次输入密码以确认',
+                notequal: '密码不一致，请重新输入'
+            },
+            /**
+             * 设置密码
+             * @method set
+             * @param {Object} [options]
+             */
+            set: function (options) {
+                this._set(options);
+            },
+            /**
+             * 修改密码
+             * @method reset
+             * @param {Object} [options]
+             */
+            reset: function (options) {
+                this._set(options, true);
+            },
+            /**
+             * 设置密码
+             * @method _set
+             * @param {Object} [options]
+             * @param {Boolean} [isReset]
+             */
+            _set: function (options, isReset) {
+                var dialog = null,
+                    Password = this,
+                    ndMarkup = Y.one('#J-set-password-dialog-markup'),
+                    ndForm,
+                    ndCurrentPassword,
+                    ndPassword,
+                    ndPassword2,
+                    ndSubmit,
+                    ndError,
+                    checker,
+                    async,
+                    tplData = {
+                        tip: '',
+                        currentPasswordField: '',
+                        mobileField: ''
+                    },
+                    DIALOG_ID = 'set-password-dialog',
+                    CURRENT_PASSWORD_FIELD_TPL = '<div class="field-group">' +
+                                '<label>当前密码</label>' +
+                                '<input type="password" name="currentpassword" id="current-password" class="f-text" autocomplete="off" />' +
+                                '</div>',
+                    MOBILE_FIELD_TPL = '<div class="field-group"><label class="text">手机号</label>{mobile}</div>';
+
+                options = options || {};
+                Y.mix(tplData, options, true, ['tip']);
+                if (isReset) {
+                    tplData.action = '/account/settings';
+                    tplData.currentPasswordField = CURRENT_PASSWORD_FIELD_TPL;
+                } else {
+                    tplData.action = '/account/addpassword';
+                    if (options.mobile) {
+                        tplData.mobileField = sub(MOBILE_FIELD_TPL, {
+                            mobile: options.mobile
+                        });
+                    }
+                }
+
+                dialog = new Dialog({
+                    id: DIALOG_ID,
+                    width: '400px',
+                    title: '设置密码',
+                    content: sub(ndMarkup.getHTML(), tplData)
+                });
+                dialog.open();
+                bindEvent();
+
+                // 绑定事件
+                function bindEvent() {
+                    ndForm = dialog.one('form');
+                    ndCurrentPassword = $Util.field(ndForm, 'currentpassword');
+                    ndPassword = $Util.field(ndForm, 'password');
+                    ndPassword2 = $Util.field(ndForm, 'password2');
+                    ndSubmit = $Util.field(ndForm, 'commit');
+                    ndError = ndForm.one('.error');
+
+                    Y.use('www-passwordstrength', function () {
+                        ndPassword.on('keyup', function () {
+                            $Www.PasswordStrength.check(ndPassword.get('value'));
+                        });
+                    });
+
+                    checker = new FormChecker({
+                        form: ndForm,
+                        fields: {},
+                        tipClass: FormChecker.CLASS_BLOCK_TIP,
+                        async: true
+                    });
+                    if (isReset) {
+                        checker.addField('currentPassword', {
+                            node: ndCurrentPassword,
+                            validateFn: Password.getCheckMethod(checker, 0)
+                        });
+                    }
+                    checker.addFields({
+                        'password': {
+                            node: ndPassword,
+                            validateFn: Password.getCheckMethod(checker, 1),
+                            typeTip: Password.tips.password
+                        },
+                        'password2': {
+                            node: ndPassword2,
+                            validateFn: Password.getCheckMethod(checker, 2)
+                        }
+                    });
+
+                    checker.on('submitSuccess', function (e) {
+                        e.halt();
+                        $Www.disableButton(ndSubmit);
+                        if (async && async.isInProgress()) return;
+
+                        async = $IO(ndForm.get('action'), {
+                            method: 'POST',
+                            form: { id: ndForm },
+                            on: {
+                                success: function (id, o) {
+                                    var res = $Util.getEvalRes(o);
+                                    var config;
+                                    if (res.status) {
+                                        config = {
+                                            type: 'success',
+                                            title: '设置成功！'
+                                        };
+                                        if (res.growth && res.growth > 0) {
+                                            config.tip = '您已获得<span class="growth-dialog-focus">' + parseInt(res.growth, 10) + '个成长值</span>';
+                                        }
+                                        dialog.showResult(config);
+                                        dialog.on('close', function () {
+                                            if (options.reload) {
+                                                window.location.reload();
+                                            } else if (res.redirect) {
+                                                window.location.href = res.redirect;
+                                            }
+                                        });
+                                        dialog.set('autoHide', 3);
+                                    } else {
+                                        handleSubmitFailure(res.msg);
+                                    }
+                                },
+                                failure: function () {
+                                    handleSubmitFailure('网络故障，请稍后重试');
+                                }
+                            }
+                        });
+                    });
+
+                    // 处理异步提交出错
+                    function handleSubmitFailure(errMsg) {
+                        ndError.setHTML(errMsg).show();
+                        $Www.disableButton(ndSubmit, false);
+                    }
+                }
+            },
+            /**
+             * 获取 formchecker 中用于密码检查的方法
+             * @method getCheckMethod
+             * @param {Formchecker} formchecker
+             * @param {Integer} type 0:当前密码，1:密码，2:确认密码
+             */
+            getCheckMethod: function (formchecker, type) {
+                // NOTE 由于在addField时调用此方法，有可能一些field还不能获取到
+                var fields = formchecker.get('fields'),
+                    tips = this.tips;
+
+                switch (type) {
+                case 0:
+                    // 检查当前密码
+                    return function (nd) {
+                        return getPasswordStatus(nd.get('value'), 'current');
+                    };
+                case 1:
+                    // 检查密码
+                    return function (nd) {
+                        var password = nd.get('value'),
+                            currentPassword,
+                            password2,
+                            status;
+
+                        status = getPasswordStatus(password, 'password');
+                        if (status !== false) return status;
+                        if (fields.currentPassword) {
+                            currentPassword = fields.currentPassword.node.get('value');
+                            if (currentPassword === password) return tips.thesamepwd;
+                        }
+                        password2 = fields.password2.node.get('value');
+                        if (password2 && getPasswordStatus(password2, 'password2') === false) {
+                            formchecker.checkField(fields.password2);
+                        }
+                        return false;
+                    };
+                case 2:
+                    // 检查确认密码
+                    return function (nd) {
+                        var password,
+                            password2 = nd.get('value'),
+                            status;
+
+                        status = getPasswordStatus(password2, 'password2');
+                        if (status !== false) return status;
+                        password = fields.password.node.get('value');
+                        if (password !== password2) {
+                            return tips.notequal;
+                        }
+                        return false;
+                    };
+                default:
+                    return function () {
+                        return false;
+                    };
+                }
+
+                // 检查密码语法
+                function getPasswordStatus(password, pwdtype) {
+                    var type = pwdtype || '',
+                        regWhitespace = /\s/,
+                        regPassword = /^[\x21-\x7e]{6,32}$/i;
+                    switch (type) {
+                    case 'current':
+                        if (password === '') return tips.currentpwd;
+                        break;
+                    case 'password':
+                        if (password === '') return tips.emptypwd;
+                        if (regWhitespace.test(password)) return tips.whitespace;
+                        if (!regPassword.test(password)) return tips.password;
+                        break;
+                    case 'password2':
+                        if (password === '') return tips.emptypwd2;
+                        break;
+                    default:
+                        break;
+                    }
+                    return false;
+                }
+            }
+        },
+
+        /**
+         * 手机绑定相关
+         *
+         */
+        Mobile: {
+            // 绑定
+            bind: function (content, needSmsUp) {
+                var mobileBindDialog = null,
+                    ndMobileBindDialogMarkup,
+                    MOBILE_BIND_DIALOG_ID = 'mobile-bind-dialog';
+
+                if (!content) {
+                    ndMobileBindDialogMarkup = Y.one('#mobile-bind-dialog-markup');
+                    if (!ndMobileBindDialogMarkup) return;
+                    content = ndMobileBindDialogMarkup.getHTML();
+                }
+                mobileBindDialog = new Dialog({
+                    id: MOBILE_BIND_DIALOG_ID,
+                    width: '450px',
+                    title: '绑定手机号码',
+                    content: content
+                });
+                mobileBindDialog.open();
+
+                if (needSmsUp) {
+                    this.initSmsUpBind(mobileBindDialog.one('form'), {
+                        dialog: mobileBindDialog
+                    });
+                } else {
+                    this.initBinder(mobileBindDialog);
+                }
+            },
+
+            /**
+             * 邮件注册用户主动绑定手机号
+             * TODO www-util 有类似代码
+             **/
+            initBinder: function (dialog) {
+                var ndForm = dialog.one('form'),
+                    ndMobile = $Util.field(ndForm, 'mobile'),
+                    ndVerifyCode = $Util.field(ndForm, 'verifycode'),
+                    ndMobileVerify = ndForm.one('#mobile-verify'),
+                    ndCaptcha = ndForm.one('.form-field--captcha'),
+                    ndCaptchaCode = $Util.field(ndForm, 'captcha'),
+                    ndValidateInfo = ndForm.one('#validate-info'),
+                    ndBindBtn = ndForm.one('#J-bind-btn'),
+                    needCaptcha = false,
+                    lockedMobile = '',
+                    refreshCaptcha,
+                    async,
+                    isVerifySuccess = false;
+
+                var formchecker = new FormChecker({
+                    form: ndForm,
+                    fields: {
+                        'mobile': {
+                            node: ndMobile,
+                            validateFn: checkMobile,
+                            typeTip: ''
+                        },
+                        'verifyCode': {
+                            node: ndVerifyCode,
+                            validateFn: checkVerifyCode,
+                            typeTip: ''
+                        }
+                    },
+                    tipClass: FormChecker.CLASS_INLINE_TIP,
+                    checkEvent: 'blur',
+                    showOkTip: false,
+                    async: true
+                });
+
+                // 初始化图片验证码
+                refreshCaptcha = $Www.refreshCaptcha(ndForm, true, 'captcha');
+
+                // 手机号被锁，输入新手机号时重置状态
+                ndMobile.on('keyup', function() {
+                   var mobileNum = trim(ndMobile.get('value'));
+                    // 两种情况下不会重置状态
+                    // 1. 没有被锁手机号
+                    // 2. 存在被锁手机号，但输入框手机号不合法（非11位或者与被锁手机号相同）
+                    if (lockedMobile === '' ||
+                        !(mobileNum.length === 11 && lockedMobile !== mobileNum)) {
+                        return;
+                    }
+                    needCaptcha = false;
+                    ndCaptcha.hide();
+                    showErrTip(false);
+                    ndMobileVerify.set('value', '获取动态码');
+                    $Www.disableButton(ndMobileVerify, false);
+                });
+
+                // 获取短信验证码事件绑定
+                bindMobileVerify();
+
+                // 表单提交
+                formchecker.on('submitSuccess', function(e) {
+                    e.halt();
+                    if (!isVerifySuccess) {
+                        showErrTip('请先获取手机动态码');
+                        return;
+                    }
+                    if (async && async.isInProgress()) { return; }
+                    ndBindBtn.set('value', '登录中...');
+                    async = $IO(ndForm.get('action'), {
+                        method: 'POST',
+                        form: { id: ndForm },
+                        on: {
+                            success: function(id,o) {
+                                var res = $Util.getEvalRes(o);
+                                if (res.status) {
+                                    handleSubmitSuccess(res);
+                                } else {
+                                    handleSubmitFailure(res);
+                                }
+                            },
+                            failure: function() {
+                                showErrTip('网络有问题，请稍后重试。');
+                            }
+                        }
+                    });
+                });
+
+                // 检查手机号
+                function checkMobile(nd) {
+                    var mobile = trim(nd.get('value'));
+                    if (mobile === '') {
+                        return '手机号不能为空';
+                    } else if (!REG.mobile.test(mobile)) {
+                        return '请输入正确的11位手机号';
+                    }
+                    return false;
+                }
+
+                // 检查图片验证码
+                function checkCaptchaCode(code) {
+                    if (code === '') {
+                        return '图片验证码不能为空';
+                    } else if(code.length !== 4) {
+                        return '请填入正确的图片验证码';
+                    }
+                    return false;
+                }
+
+                // 检查手机动态码
+                function checkVerifyCode(nd) {
+                    var verifyCode = trim(nd.get('value'));
+                    if (verifyCode === '') {
+                        return '动态码不能为空';
+                    }
+                    return false;
+                }
+
+                // 错误提示：如果err为空则清空错误提示
+                function showErrTip(err) {
+                    if (!err) {
+                        ndValidateInfo.setHTML('').hide();
+                        return;
+                    }
+                    err = '<i class="tip-status tip-status--opinfo"></i>' + err;
+                    ndValidateInfo.setHTML(err).show();
+                }
+
+                // 获取手机动态码事件绑定
+                function bindMobileVerify() {
+                    var err,
+                        mobileNum,
+                        captchaCode,
+                        mobileField = formchecker.get('fields').mobile;
+
+                    // 手机动态码获取按钮点击事件绑定
+                    ndMobileVerify.on('click', function () {
+                        formchecker.checkField(mobileField);
+                        if (mobileField.status !== FormChecker.STATUS_OK) {
+                            return;
+                        }
+                        mobileNum = trim(ndMobile.get('value'));
+                        captchaCode = trim(ndCaptchaCode.get('value'));
+                        // 不需要图片验证码直接发送请求
+                        if (!needCaptcha) {
+                            sendRequest({ mobile: mobileNum });
+                            return;
+                        }
+                        err = checkCaptchaCode(captchaCode);
+                        if (!err) {
+                            sendRequest({ mobile: mobileNum, captcha: captchaCode });
+                        } else {
+                            // 输出错误提示
+                            ndCaptcha.addClass('form-field--error');
+                            showErrTip(err);
+                        }
+                    });
+
+                    // 发送请求：申请手机动态码
+                    function sendRequest(data) {
+                        if (async && async.isInProgress()) { return; }
+
+                        async = $IO('/account/bindsendnew', {
+                            method: 'POST',
+                            data: $Util.toPostData(data),
+                            on: {
+                                success: function (id, o) {
+                                    var res = $Util.getEvalRes(o);
+                                    //更换绑定手机号时如果使用的是已经被绑定手机号需添加confirm字段进行确认
+                                    if (res.data && res.data.needconfirm) {
+                                        if (window.confirm(res.msg)) {
+                                            data['confirm'] = true;
+                                            sendRequest(data);
+                                        }
+                                    } else if (res.status) {
+                                        $Www.disableButton(ndVerifyCode, false);
+                                        $Www.disableButton(ndBindBtn, false);
+                                        handleVerifySuccess();
+                                    } else {
+                                        handleVerifyFailure(res, data.mobileNum);
+                                    }
+                                },
+                                failure: function() {
+                                    showErrTip('网络有问题，请稍后重试。');
+                                }
+                            }
+                        });
+                    }
+
+                    // 手机动态码申请成功
+                    function handleVerifySuccess() {
+                        var delay = 60,
+                            timer;
+
+                        isVerifySuccess = true;
+                        // 清空错误提示
+                        showErrTip(false);
+                        // 隐藏图片验证码模块
+                        if (needCaptcha) {
+                            ndCaptcha.hide();
+                            needCaptcha = false;
+                        }
+                        $Www.disableButton(ndMobileVerify);
+                        timer = window.setInterval(function() {
+                            delay -= 1;
+                            if (delay) {
+                                ndMobileVerify.set('value', '已发送，' + delay + '秒后可重新获取');
+                            } else {
+                                window.clearInterval(timer);
+                                ndMobileVerify.set('value', '重新获取');
+                                $Www.disableButton(ndMobileVerify, false);
+                            }
+                        }, 1000);
+                    }
+
+                    // 手机动态码申请失败
+                    function handleVerifyFailure(res, mobileNum) {
+                        showErrTip(res.msg);
+                        isVerifySuccess = false;
+
+                        // errType的取值范围为大于1
+                        if (res.errType) {
+                            switch(res.errType) {
+                                // 申请动态码次数过多，限制登录
+                                case 2:
+                                    lockedMobile = mobileNum;
+                                    ndCaptcha.hide();
+                                    $Www.disableButton(ndMobileVerify);
+                                    break;
+                                // 要求添加图片验证码
+                                case 3:
+                                    needCaptcha = true;
+                                    refreshCaptcha.update();
+                                    ndCaptcha.show();
+                                    ndCaptchaCode.focus();
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                    }
+                }
+
+                // 绑定手机号成功
+                function handleSubmitSuccess(res) {
+                    dialog.after('close', function() {
+                        window.location.reload();
+                    });
+                    var config = {};
+                    config.type = 'success';
+                    // 此处接口尚未明确
+                    config.tip = res.msg;
+                    if (res.growth && res.growth > 0) {
+                        config.tip = '您已获得<span class="growth-dialog-focus">' + parseInt(res.growth, 10) + '个成长值</span>';
+                    }
+                    config.autoHide = 2;
+                    $Www.Dialog.showResult(dialog, config);
+                }
+
+                // 绑定手机号失败
+                function handleSubmitFailure(res) {
+                    showErrTip(res.msg);
+                    if (res.errType === 1) {
+                        $Www.disableButton(ndVerifyCode);
+                        $Www.disableButton(ndBindBtn);
+                    }
+                    ndBindBtn.set('value', '登录');
+                }
+            },
+            /**
+             * @description 上行短信绑定手机号
+             * TODO duplicate with initSmsUpRebind
+             */
+            initSmsUpBind: function (ndForm, config) {
+                var ndMobileInput = Y.one('#J-smsup-bind-input');
+                if (!ndMobileInput) return;
+
+                var STATUS_MOBILE_INVALID = 1,          // 手机号无效
+                    STATUS_MOBILE_VALID = 2,            // 手机号有效
+                    STATUS_BIND_FAIL = 3,               // 手机号绑定失败
+                    STATUS_BIND_SUCCESS = 4;            // 手机号绑定成功
+
+                var ndNext = Y.one('#J-smsup-bind-next'),
+                    ndMask = Y.one('#J-smsup-bind-mask'),
+                    ndStep1 = Y.one('#J-smsup-bind-step1'),
+                    ndStep2 = Y.one('#J-smsup-bind-step2'),
+                    ndCheck = Y.one('#J-smsup-bind-check'),
+                    alert = (typeof Y.mt.www.Dialog.alert !== 'undefined') ? Y.mt.www.Dialog.alert : window.alert,
+                    status = STATUS_MOBILE_INVALID,
+                    async;
+
+                config = config || {};
+
+                // 表单提交时需要完成绑定才行
+                if (ndForm) {
+                    ndForm.on('submit', function (e) {
+                        checkMobile();
+                        switch (status) {
+                        case STATUS_BIND_SUCCESS:
+                            return true;
+                        case STATUS_MOBILE_INVALID:
+                            alert('请输入正确的手机号');
+                            break;
+                        case STATUS_BIND_FAIL:
+                        case STATUS_MOBILE_VALID:
+                            alert('您尚未完成手机号码绑定');
+                            break;
+                        }
+                        e.halt();
+                        return false;
+                    });
+                }
+
+                // 提交手机号到后端
+                ndNext.on('click', function (e) {
+                    e.halt();
+                    if (async && async.isInProgress()) return;
+
+                    // check mobile
+                    var errorMessage = checkMobile();
+                    if (errorMessage) {
+                        return alert(errorMessage);
+                    }
+
+                    // submit mobile
+                    async = $IO(ndNext.getData('action'), {
+                        method: 'POST',
+                        data: $Util.toPostData({
+                            mobile: ndMobileInput.get('value')
+                        }),
+                        on: {
+                            success: handleMobileSaved
+                        }
+                    });
+                });
+
+                // go to step 2
+                function handleMobileSaved(id, responseText) {
+                    var response = $Util.getEvalRes(responseText),
+                        ndSmsContent = Y.one('#J-upstream-sms-content'),
+                        ndSmsReceiver = Y.one('#J-upstream-sms-receiver');
+
+                    if (response.status) {
+                        ndStep1.hide();
+                        ndStep2.show();
+
+                        ndMask.setHTML(response.maskmobile);
+                        ndSmsContent.setHTML(response.verifycode);
+                        ndSmsReceiver.setHTML(response.damobile);
+
+                        Y.mt.www.Dialog.Mobile.initSmsUpChecker(ndCheck, Y.merge({
+                            successFn: onBindSuccess,
+                            failFn: onBindFailure,
+                            failMsg: '您发送的短信暂时无法收到，建议您咨询客服解决',
+                            type: '绑定'
+                        }, config));
+                    } else {
+                        alert({ tip: response.msg, reload: true });
+                    }
+                }
+
+                function onBindSuccess(res) {
+                    status = STATUS_BIND_SUCCESS;
+                    var tip = '绑定成功';
+                    if (res.growth && res.growth > 0) {
+                        tip = '您已获得<span class="growth-dialog-focus">' + parseInt(res.growth, 10) + '个成长值</span>';
+                    }
+                    alert({ tip: tip, reload: true, autoHide: 5 });
+                }
+
+                function onBindFailure() {
+                    status = STATUS_BIND_FAIL;
+                }
+
+                function checkMobile() {
+                    var mobile = ndMobileInput.get('value');
+                    if (mobile === '') {
+                        return '请输入手机号';
+                    } else if (!(/^\d{11}$/).test(mobile)) {
+                        return '请输入正确的11位手机号码';
+                    }
+                    status = STATUS_MOBILE_VALID;
+                    return false;
+                }
+
+            },
+
+            /**
+             * @description 上行短信换绑手机号
+             */
+            initSmsUpRebind: function (ndForm, config) {
+                var ndMobile = Y.one('#J-smsup-bind-input'),
+                    ndOldMobile = Y.one('#J-smsup-bind-input-old');
+
+                if (!ndMobile || !ndOldMobile) return;
+
+                var STATUS_MOBILE_INVALID = 1,          // 手机号无效
+                    STATUS_MOBILE_VALID = 2,            // 手机号有效
+                    STATUS_BIND_FAIL = 3,               // 手机号绑定失败
+                    STATUS_BIND_SUCCESS = 4;            // 手机号绑定成功
+
+                var ndNext = Y.one('#J-smsup-bind-next'),
+                    ndMask = Y.one('#J-smsup-bind-mask'),
+                    ndStep1 = Y.one('#J-smsup-bind-step1'),
+                    ndStep2 = Y.one('#J-smsup-bind-step2'),
+                    ndCheck = Y.one('#J-smsup-bind-check'),
+                    alert = (typeof Y.mt.www.Dialog.alert !== 'undefined') ? Y.mt.www.Dialog.alert : window.alert,
+                    status = STATUS_MOBILE_INVALID,
+                    async;
+
+                config = config || {};
+
+                // 表单提交时需要完成绑定才行
+                if (ndForm) {
+                    ndForm.on('submit', function (e) {
+                        checkMobile();
+                        switch (status) {
+                        case STATUS_BIND_SUCCESS:
+                            return true;
+                        case STATUS_MOBILE_INVALID:
+                            alert('请输入正确的手机号');
+                            break;
+                        case STATUS_BIND_FAIL:
+                        case STATUS_MOBILE_VALID:
+                            alert('您尚未完成手机号码绑定');
+                            break;
+                        }
+                        e.halt();
+                        return false;
+                    });
+                }
+
+                // 提交手机号到后端
+                ndNext.on('click', function (e) {
+                    e.halt();
+                    if (async && async.isInProgress()) return;
+
+                    // check mobile
+                    var errorMessage = checkMobile();
+                    if (errorMessage) {
+                        return alert(errorMessage);
+                    }
+
+                    // submit mobile
+                    async = $IO(ndNext.getData('action'), {
+                        method: 'POST',
+                        data: $Util.toPostData({
+                            mobile: ndMobile.get('value'),
+                            oldmobile: ndOldMobile.get('value')
+                        }),
+                        on: {
+                            success: handleMobileSaved
+                        }
+                    });
+                });
+
+                // go to step 2
+                function handleMobileSaved(id, responseText) {
+                    var response = $Util.getEvalRes(responseText),
+                        ndSmsContent = Y.one('#J-upstream-sms-content'),
+                        ndSmsReceiver = Y.one('#J-upstream-sms-receiver');
+
+                    if (response.status) {
+                        ndStep1.hide();
+                        ndStep2.show();
+
+                        ndMask.setHTML(response.maskmobile);
+                        ndSmsContent.setHTML(response.verifycode);
+                        ndSmsReceiver.setHTML(response.damobile);
+
+                        Y.mt.www.Dialog.Mobile.initSmsUpChecker(ndCheck, Y.merge({
+                            successFn: onBindSuccess,
+                            failFn: onBindFailure,
+                            failMsg: '您发送的短信暂时无法收到，建议您咨询客服解决',
+                            type: '绑定'
+                        }, config));
+                    } else {
+                        alert({ tip: response.msg, reload: true });
+                    }
+                }
+
+                function onBindSuccess(res) {
+                    status = STATUS_BIND_SUCCESS;
+                    var tip = '绑定成功';
+                    if (res.growth && res.growth > 0) {
+                        tip = '您已获得<span class="growth-dialog-focus">' + parseInt(res.growth, 10) + '个成长值</span>';
+                    }
+                    alert({ tip: tip, reload: true, autoHide: 5 });
+                }
+
+                function onBindFailure() {
+                    status = STATUS_BIND_FAIL;
+                }
+
+                function checkMobile() {
+                    var mobile = ndMobile.get('value'),
+                        oldmobile = ndOldMobile.get('value');
+
+                    if (oldmobile === '') {
+                        return '请输入原手机号';
+                    } else if (mobile === '') {
+                        return '请输入新手机号';
+                    } else if (!(/^\d{11}$/).test(mobile) || !(/^\d{11}$/).test(oldmobile)) {
+                        return '请输入正确的11位手机号码';
+                    } else if (oldmobile === mobile) {
+                        return '新手机号不能和原手机号相同';
+                    }
+                    status = STATUS_MOBILE_VALID;
+                    return false;
+                }
+
+            },
+
+            /**
+             * 上行短信倒计时和状态检查
+             */
+            initSmsUpChecker: function (ndBtn, config) {
+                ndBtn = Y.one(ndBtn);
+                if (!ndBtn) return;
+                var timer,
+                    async,
+                    checkTimeout = 60,
+                    checkInterval = 10,
+                    delay = checkTimeout,
+                    alert = (typeof Y.mt.www.Dialog.alert !== 'undefined') ? Y.mt.www.Dialog.alert : window.alert,
+                    DISABLE_CLASS = 'btn-disabled',
+                    action = ndBtn.getData('action'),
+                    type,
+                    isSuccess = false,
+                    defaultConfig = {
+                        // 检查成功回调函数
+                        successFn: function () {},
+                        // 检查失败执行回调
+                        failFn: function () {},
+                        type: '注册',
+                        failMsg: ''
+                    };
+
+                config = Y.merge(defaultConfig, config);
+                type = config.type;
+
+                ndBtn.on('click', function () {
+                    ndBtn.addClass(DISABLE_CLASS).set('disabled', true).set('value', '系统将在(' + delay + ')内完成' + type);
+                    countDown();
+                    timer = window.setInterval(countDown, 1000);
+                });
+
+                if (config.dialog && config.dialog.on) {
+                    config.dialog.on('close', function () {
+                        if (timer) {
+                            window.clearInterval(timer);
+                        }
+                    });
+                }
+
+                function countDown() {
+                    if (!isSuccess && delay) {
+                        // 每10秒检查1次绑定状态
+                        if (delay % checkInterval === 0) {
+                            checkStatus();
+                        }
+                        ndBtn.set('value', '系统将在(' + delay + '秒)内完成' + type);
+                    } else {
+                        window.clearInterval(timer);
+                        if (!isSuccess) {
+                            // 当倒计时结束时还没成功进行最后1次检查
+                            checkStatus(onCountDownEnd);
+                        }
+                    }
+                    delay -= 1;
+                }
+
+                function onCountDownEnd() {
+                    if (!isSuccess) {
+                        alert(config.failMsg);
+                        delay = checkTimeout;
+                        ndBtn.set('value', type + '失败，请重发短信后再次确认').set('disabled', false).removeClass(DISABLE_CLASS);
+                    }
+                }
+
+                function checkStatus(callback) {
+                    async = $IO(action, {
+                        method: 'POST',
+                        data: $Util.toPostData(config.data),
+                        on: {
+                            success: function (id, o) {
+                                var res = $Util.getEvalRes(o);
+                                res.status = parseInt(res.status, 10);
+                                // status: 0表示成功，1表示无法继续的错误，2表示未收到短信或操作失败
+                                if (res.status === 0) {
+                                    isSuccess = true;
+                                    if (config.successFn) config.successFn(res);
+                                } else if (res.status === 1) {
+                                    alert({ tip: res.msg, reload: true });
+                                } else {
+                                    isSuccess = false;
+                                    if (config.failFn) config.failFn(res);
+                                }
+                                if (callback) {
+                                    callback(res);
+                                }
+                            },
+                            failure: function () {
+                                alert('网络异常，请重试');
+                                ndBtn.set('disabled', false).removeClass(DISABLE_CLASS);
+                            }
+                        }
+                    });
+                }
+            },
+
+            _performVerify: function (params) {
+                if (!params.ndForm) {
+                    return;
+                }
+
+                var config = params.config || {},
+                    ndSubmit = params.ndForm.one('input[type="submit"]'),
+                    ndVerifyMsg = params.ndVerifyMsg || null,
+                    ERROR_TIP_CLASS = 'error';
+
+                $Www.disableButton(ndSubmit, true);
+                if (ndVerifyMsg) {
+                    ndVerifyMsg.removeClass(ERROR_TIP_CLASS);
+                    ndVerifyMsg.setHTML('');
+                }
+                $IO(params.ndForm.get('action'), {
+                    method: 'POST',
+                    form: { id: params.ndForm },
+                    on: {
+                        success: function (id, o) {
+                            var res = $Util.getEvalRes(o);
+                            var tip;
+                            if (res.status) {
+                                if (params.callback) {
+                                    params.callback(res);
+                                } else {
+                                    config.type = res.status ? 'success' : 'failure';
+                                    tip = res.msg;
+                                    if (res.growth && res.growth > 0) {
+                                        tip = '您已获得<span class="growth-dialog-focus">' + parseInt(res.growth, 10) + '个成长值</span>';
+                                    }
+                                    config.tip = tip;
+                                    config.autoHide = 2;
+                                    $Www.Dialog.showResult(params.dialog, config);
+                                }
+                            } else {
+                                $Www.disableButton(ndSubmit, false);
+                                if (ndVerifyMsg) {
+                                    ndVerifyMsg.addClass(ERROR_TIP_CLASS);
+                                    ndVerifyMsg.setHTML(res.msg);
+                                } else {
+                                    $Www.Dialog.alert(res.msg);
+                                }
+                            }
+                        },
+                        failure: function () {
+                            $Www.disableButton(ndSubmit, false);
+                        }
+                    }
+                });
+            },
+
+            _check: function (ndMobile) {
+                if (!(/^\d{11}$/).test(ndMobile.get('value'))) return '请输入正确的11位手机号码';
+                return false;
+            }
+        },
+
+        /**
+         * 图片验证码相关
+         *
+         */
+        Captcha: {
+            tips: {
+                'type': '请输入图片中的字符，不区分大小写',
+                'empty': '请输入验证码',
+                'error': '验证码输入错误，请重新输入'
+            },
+            /**
+             * 图片验证码刷新事件绑定
+             * @method
+             * @param {Node} ndForm
+             */
+            bindRefreshEvent: function (ndForm) {
+                if (!ndForm) return;
+                var ndCaptchaRefresh = ndForm.one('.captcha-refresh'),
+                    ndImg = ndForm.one('.signup-captcha-img'),
+                    Cap = this;
+                if (!ndCaptchaRefresh || !ndImg) return;
+                ndForm.delegate('click', function (e) {
+                    e.halt();
+                    Cap.refresh(ndForm);
+                }, '.signup-captcha-img, .captcha-refresh');
+            },
+            /**
+             * 更新验证码
+             */
+            refresh: function (ndForm) {
+                var ndImg = ndForm.one('.signup-captcha-img'),
+                    src = ndImg.getAttribute('src').replace(/(\?0\.\d+)?$/, '');
+                ndImg.setAttribute('src', src + '?' + Math.random());
+            },
+
+            /**
+             * 图片验证码格式检查
+             * @method
+             * @param {Node} ndCaptcha
+             * @return {Boolean} 返回 false 表示格式正确
+             */
+            check: function (ndCaptcha) {
+                var captcha = ndCaptcha.get('value'),
+                    tips = $Www.Dialog.Captcha.tips;
+                if (captcha === '') {
+                    return tips.empty;
+                } else if (captcha.length !== 4) {
+                    return tips.error;
+                }
+                return false;
+            }
+        },
+
+        /**
+         * 提交表单后弹窗显示结果的设置，需要先open dialog
+         *
+         * @method showResult
+         * @param {Object} dialog
+         * @param {Object} config,
+         *      config = {
+         *          reload: {Boolean},          // 是否刷新当前页，默认不刷新
+         *          autoHide: {false | Number}, // 持续多长时间后自动隐藏，默认不自动隐藏
+         *          type: {'success'|'failure'},            // 成功还是失败，默认为失败
+         *          title: {String},            // 显示的内容（突出部分）
+         *          tip: {String}               // 显示的内容（小字部分）
+         *      }
+         */
+        showResult: function (dialog, config) {
+            config = config || {};
+            if (!config.title) {
+                config.title = config.type === 'success' ? '操作成功' : '操作失败';
+            }
+            dialog.showResult(config);
+            if (config.autoHide !== undefined) {
+                dialog.set('autoHide', config.autoHide);
+            }
+            if (config.reload) {
+                dialog.after('close', function () {
+                    window.location.reload();
+                });
+            }
+            if (config.onClose) {
+                dialog.after('close', function () {
+                    config.onClose(dialog);
+                });
+            }
+        },
+
+        /**
+         * 结果弹窗，无须创建dialog实例
+         *
+         * @method createResultDialog
+         * @param {Object} config 详见showResult
+         * @param {String} title 弹窗的标题
+         */
+        createResultDialog: function (config, title, dialogID) {
+            dialogID = dialogID || 'MT_SHOW_RESULT_DIALOG';
+            var dialog = new Dialog({
+                id: dialogID,
+                title: title || ''
+            });
+
+            dialog.open();
+            this.showResult(dialog, config);
+        }
+    });
+},
+// version
+'1.0.0',
+// dependency
+{
+    requires: ['www-base', 'mt-formchecker', 'mt-dialog']
+});
+;/**
+ * @module www-anti-crawl
+ */
+M.add('www-anti-crawl', function (Y) {
+    var $IO = Y.io;
+    var Dialog = Y.mt.Dialog;
+    var $Www = Y.mt.www;
+    var FormChecker = Y.mt.FormChecker;
+    var $Util = Y.mt.util;
+
+    Y.namespace('mt.www.AntiCrawl');
+    Y.mt.www.AntiCrawl = {
+        /**
+         * 输出验证弹窗
+         * @param {Object} config 配置参数（http://wiki.sankuai.com/pages/viewpage.action?pageId=143759353）:
+         *      {
+         *          // uuid 验证时传递的参数
+         *          'uuid': ''
+         *          // 动态码
+         *          'captcha': 'http://passport.meituan.com/account/appcaptcha?uuid=<uuid>'
+         *          // 验证接口
+         *          'verify': '/captcha/verify'
+         *      }
+         **/
+        showVerifyDialog: function(config) {
+            var uuid = config.uuid;
+            var action = config.verify;
+            var captcha = config.captcha;
+
+            var formTpl =
+                '<form class="form" method="post">' +
+                    '<div class="form-field form-field--captcha">' +
+                        '<label>验证码</label>' +
+                        '<input type="text" class="f-text f-text--captcha" name="captcha" placeholder="验证码" autocomplete="off"> ' +
+                        '<img height="36px" width="72px" src="' + captcha + '"> ' +
+                        '<a tabindex="-1" class="captcha-refresh inline-link" href="javascript:void(0)">看不清楚？换一张</a>' +
+                    '</div>' +
+                    '<div class="form-field">' +
+                        '<input type="submit" class="btn" value="确定">' +
+                    '</div>' +
+                '</form>';
+
+            var ATYPICAL_AJAX_ID = 'atypical-ajax-dialog';
+
+            var verifyDialog = new Dialog({
+                id: ATYPICAL_AJAX_ID,
+                width: '540px',
+                title: '访问异常，请您输入图片验证码后继续访问',
+                content: formTpl
+            });
+
+            // 打开弹窗
+            verifyDialog.open();
+            // 强制关闭弹窗则刷新页面
+            verifyDialog.on('close', function() {
+                location.reload();
+            });
+            // 弹窗中的表单检查
+            var ndForm = verifyDialog.one('form');
+            var captchaUpdate = $Www.refreshCaptcha(ndForm, false).update;
+
+            var ndCapthca = $Util.field(ndForm, 'captcha');
+            var formChecker = new FormChecker({
+                form: ndForm,
+                fields: {
+                    captcha: {
+                        node: ndCapthca,
+                        validateFn: checkCaptcha,
+                        typeTip: '',
+                        errorTip: '请输入验证码图片'
+                    }
+                },
+                async: true // 异步提交
+            });
+            var async;
+            formChecker.on('submitSuccess', function (e) {
+                e.halt();
+                var self = this;
+                var config = {};
+
+                if (async && async.isInProgress()) return;
+
+                // 异步提交表单进行验证
+                async = $IO(action, {
+                    method: 'POST',
+                    data: $Util.toPostData({ 'uuid': uuid, 'captcha': ndCapthca.get('value')}),
+                    on: {
+                        success: function (id, o) {
+                            var res = $Util.getEvalRes(o);
+                            var match = false;
+                            if (res.data && res.data.match) {
+                                match = true;
+                            }
+                            if (match) { // 验证成功后刷新页面
+                                location.reload();
+                            } else { // 验证失败则提示失败信息，重新进行验证操作
+                                var errMsg = '未知错误';
+                                if (res.error && res.error.message) {
+                                    errMsg = res.error.message;
+                                }
+                                self.setErrorTip('captcha', res.error.message);
+                                captchaUpdate();
+                            }
+                        },
+                        failure: function () {
+                            // 出现404，500也要求刷新页面
+                            location.reload();
+                        }
+                    }
+                });
+            });
+
+            // 检查图片验证码格式是否合法
+            function checkCaptcha(nd) {
+                var captcha = nd.get('value');
+                if (captcha === '') {
+                    return '请输入图片验证码';
+                }
+                if (captcha.length !== 4) {
+                    return '验证码输入错误，请重新输入';
+                }
+                return false;
+            }
+        }
+    };
+},
+// version
+'0.0.1',
+// dependency
+{
+    requires: ['www-base', 'www-dialog', 'mt-formchecker']
+});
+;/*
+YUI 3.16.0 (build 76f0e08)
+Copyright 2014 Yahoo! Inc. All rights reserved.
+Licensed under the BSD License.
+http://yuilibrary.com/license/
+*/
+
+YUI.add("transition",function(e,t){var n="",r="",i=e.config.doc,s="documentElement",o=i[s].style,u="transition",a="transitionProperty",f,l,c,h,p,d,v={},m=["Webkit","Moz"],g={Webkit:"webkitTransitionEnd"},y=function(){this.init.apply(this,arguments)};y._TRANSFORM="transform",y._toCamel=function(e){return e=e.replace(/-([a-z])/gi,function(e,t){return t.toUpperCase()}),e},y._toHyphen=function(e){return e=e.replace(/([A-Z]?)([a-z]+)([A-Z]?)/g,function(e,t,n,r){var i=(t?"-"+t.toLowerCase():"")+n;return r&&(i+="-"+r.toLowerCase()),i}),e},y.SHOW_TRANSITION="fadeIn",y.HIDE_TRANSITION="fadeOut",y.useNative=!1,"transition"in o&&"transitionProperty"in o&&"transitionDuration"in o&&"transitionTimingFunction"in o&&"transitionDelay"in o?(y.useNative=!0,y.supported=!0):e.Array.each(m,function(e){var t=e+"Transition";t in i[s].style&&(n=e,r=y._toHyphen(e)+"-",y.useNative=!0,y.supported=!0,y._VENDOR_PREFIX=e)}),typeof o.transform=="undefined"&&e.Array.each(m,function(e){var t=e+"Transform";typeof o[t]!="undefined"&&(y._TRANSFORM=t)}),n&&(u=n+"Transition",a=n+"TransitionProperty"),f=r+"transition-property",l=r+"transition-duration",c=r+"transition-timing-function",h=r+"transition-delay",p="transitionend",d="on"+n.toLowerCase()+"transitionend",p=g[n]||p,y.fx={},y.toggles={},y._hasEnd={},y._reKeywords=/^(?:node|duration|iterations|easing|delay|on|onstart|onend)$/i,e.Node.DOM_EVENTS[p]=1,y.NAME="transition",y.DEFAULT_EASING="ease",y.DEFAULT_DURATION=.5,y.DEFAULT_DELAY=0,y._nodeAttrs={},y.prototype={constructor:y,init:function(e,t){var n=this;return n._node=e,!n._running&&t&&(n._config=t,e._transition=n,n._duration="duration"in t?t.duration:n.constructor.DEFAULT_DURATION,n._delay="delay"in t?t.delay:n.constructor.DEFAULT_DELAY,n._easing=t.easing||n.constructor.DEFAULT_EASING,n._count=0,n._running=!1),n},addProperty:function(t,n){var r=this,i=this._node,s=e.stamp(i),o=e.one(i),u=y._nodeAttrs[s],a,f,l,c,h;u||(u=y._nodeAttrs[s]={}),c=u[t],n&&n.value!==undefined?h=n.value:n!==undefined&&(h=n,n=v),typeof h=="function"&&(h=h.call(o,o)),c&&c.transition&&c.transition!==r&&c.transition._count--,r._count++,l=(typeof n.duration!="undefined"?n.duration:r._duration)||1e-4,u[t]={value:h,duration:l,delay:typeof n.delay!="undefined"?n.delay:r._delay,easing:n.easing||r._easing,transition:r},a=e.DOM.getComputedStyle(i,t),f=typeof h=="string"?a:parseFloat(a),y.useNative&&f===h&&setTimeout(function(){r._onNativeEnd.call(i,{propertyName:t,elapsedTime:l})},l*1e3)},removeProperty:function(t){var n=this,r=y._nodeAttrs[e.stamp(n._node)];r&&r[t]&&(delete r[t],n._count--)},initAttrs:function(t){var n,r=this._node;t.transform&&!t[y._TRANSFORM]&&(t[y._TRANSFORM]=t.transform,delete t.transform);for(n in t)t.hasOwnProperty(n)&&!y._reKeywords.test(n)&&(this.addProperty(n,t[n]),r.style[n]===""&&e.DOM.setStyle(r,n,e.DOM.getComputedStyle(r,n)))},run:function(t){var n=this,r=n._node,i=n._config,s={type:"transition:start",config:i};return n._running||(n._running=!0,i.on&&i.on.start&&i.on.start.call(e.one(r),s),n.initAttrs(n._config),n._callback=t,n._start()),n},_start:function(){this._runNative()},_prepDur:function(e){return e=parseFloat(e)*1e3,e+"ms"},_runNative:function(){var t=this,n=t._node,r=e.stamp(n),i=n.style,s=n.ownerDocument.defaultView.getComputedStyle(n),o=y._nodeAttrs[r],u="",a=s[y._toCamel(f)],d=f+": ",v=l+": ",m=c+": ",g=h+": ",b,w,E;a!=="all"&&(d+=a+",",v+=s[y._toCamel(l)]+",",m+=s[y._toCamel(c)]+",",g+=s[y._toCamel(h)]+",");for(E in o)b=y._toHyphen(E),w=o[E],(w=o[E])&&w.transition===t&&(E in n.style?(v+=t._prepDur(w.duration)+",",g+=t._prepDur(w.delay)+",",m+=w.easing+",",d+=b+",",u+=b+": "+w.value+"; "):this.removeProperty(E));d=d.replace(/,$/,";"),v=v.replace(/,$/,";"),m=m.replace(/,$/,";"),g=g.replace(/,$/,";"),y._hasEnd[r]||(n.addEventListener(p,t._onNativeEnd,""),y._hasEnd[r]=!0),i.cssText+=d+v+m+g+u},_end:function(t){var n=this,r=n._node,i=n._callback,s=n._config,o={type:"transition:end",config:s,elapsedTime:t},u=e.one(r);n._running=!1,n._callback=null,r&&(s.on&&s.on.end?setTimeout(function(){s.on.end.call(u,o),i&&i.call(u,o)},1):i&&setTimeout(function(){i.call(u,o)},1))},_endNative:function(e){var t=this._node,n=t.ownerDocument.defaultView.getComputedStyle(t,"")[y._toCamel(f)];e=y._toHyphen(e),typeof n=="string"&&(n=n.replace(new RegExp("(?:^|,\\s)"+e+",?"),","),n=n.replace(/^,|,$/,""),t.style[u]=n)},_onNativeEnd:function(t){var n=this,r=e.stamp(n),i=t,s=y._toCamel(i.propertyName),o=i.elapsedTime,u=y._nodeAttrs[r],f=u[s],l=f?f.transition:null,c,h;l&&(l.removeProperty(s),l._endNative(s),h=l._config[s],c={type:"propertyEnd",propertyName:s,elapsedTime:o,config:h},h&&h.on&&h.on.end&&h.on.end.call(e.one(n),c),l._count<=0&&(l._end(o),n.style[a]=""))},destroy:function(){var e=this,t=e._node;t&&(t.removeEventListener(p,e._onNativeEnd,!1),e._node=null)}},e.Transition=y,e.TransitionNative=y,e.Node.prototype.transition=function(t,n,r){var i=y._nodeAttrs[e.stamp(this._node)],s=i?i.transition||null:null,o,u;if(typeof t=="string"){typeof n=="function"&&(r=n,n=null),o=y.fx[t];if(n&&typeof n=="object"){n=e.clone(n);for(u in o)o.hasOwnProperty(u)&&(u in n||(n[u]=o[u]))}else n=o}else r=n,n=t;return s&&!s._running?s.init(this,n):s=new y(this._node,n),s.run(r),this},e.Node.prototype.show=function(t,n,r){return this._show(),t&&e.Transition&&(typeof t!="string"&&!t.push&&(typeof n=="function"&&(r=n,n=t),t=y.SHOW_TRANSITION),this.transition(t,n,r)),this},e.NodeList.prototype.show=function(t,n,r){var i=this._nodes,s=0,o;while(o=i[s++])e.one(o).show(t,n,r);return this};var b=function(e,t,n){return function(){t&&t.call(e),n&&typeof n=="function"&&n.apply(e._node,arguments)}};e.Node.prototype.hide=function(t,n,r){return t&&e.Transition?(typeof n=="function"&&(r=n,n=null),r=b(this,this._hide,r),typeof t!="string"&&!t.push&&(typeof n=="function"&&(r=n,n=t),t=y.HIDE_TRANSITION),this.transition(t,n,r)):this._hide(),this},e.NodeList.prototype.hide=function(t,n,r){var i=this._nodes,s=0,o;while(o=i[s++])e.one(o).hide(t,n,r);return this},e.NodeList.prototype
+.transition=function(t,n,r){var i=this._nodes,s=this.size(),o=0,r=r===!0,u;while(u=i[o++])o<s&&r?e.one(u).transition(t):e.one(u).transition(t,n);return this},e.Node.prototype.toggleView=function(t,n,r){this._toggles=this._toggles||[],r=arguments[arguments.length-1];if(typeof t!="string"){n=t,this._toggleView(n,r);return}return typeof n=="function"&&(n=undefined),typeof n=="undefined"&&t in this._toggles&&(n=!this._toggles[t]),n=n?1:0,n?this._show():r=b(this,this._hide,r),this._toggles[t]=n,this.transition(e.Transition.toggles[t][n],r),this},e.NodeList.prototype.toggleView=function(t,n,r){var i=this._nodes,s=0,o;while(o=i[s++])o=e.one(o),o.toggleView.apply(o,arguments);return this},e.mix(y.fx,{fadeOut:{opacity:0,duration:.5,easing:"ease-out"},fadeIn:{opacity:1,duration:.5,easing:"ease-in"},sizeOut:{height:0,width:0,duration:.75,easing:"ease-out"},sizeIn:{height:function(e){return e.get("scrollHeight")+"px"},width:function(e){return e.get("scrollWidth")+"px"},duration:.5,easing:"ease-in",on:{start:function(){var e=this.getStyle("overflow");e!=="hidden"&&(this.setStyle("overflow","hidden"),this._transitionOverflow=e)},end:function(){this._transitionOverflow&&(this.setStyle("overflow",this._transitionOverflow),delete this._transitionOverflow)}}}}),e.mix(y.toggles,{size:["sizeOut","sizeIn"],fade:["fadeOut","fadeIn"]})},"3.16.0",{requires:["node-style"]});
+
+;/*jshint white:true, unused:true*/
+/**
+ * @module www-index
+ */
+M.add('www-index', function (Y) {
+    var $Util = Y.mt.util,
+        $Cookie = $Util.Cookie;
+    var $IO = Y.io;
+
+    Y.namespace('mt.www.Index');
+
+    /**
+     *
+     * @class Index
+     * @namespace Y.mt.www
+     */
+    Y.mt.www.Index = {
+        /**
+         * @description 首页筛选之酒店旅游目的地展开和收起
+         * @param {Node} nd
+         */
+        toggleDestination: function (nd) {
+            nd = Y.one(nd);
+            var ndCityListWrapper = nd && nd.one('.J-city-list');
+            if (!ndCityListWrapper) return;
+            var nlCityList = ndCityListWrapper.all('a'),
+                nlSubCityList = nd.all('.J-sub-city-list'),
+                CURRENT_CLASS = 'current',
+                indexValue;
+
+            nlCityList.some(function (nd, index) {
+                if (nd.ancestor('.item').hasClass(CURRENT_CLASS)) {
+                    indexValue = index;
+                    return true;
+                }
+            });
+            ndCityListWrapper.delegate('click', function (e) {
+                e.halt();
+                var index = nlCityList.indexOf(this);
+                if (typeof indexValue !== 'undefined') {
+                    nlCityList.item(indexValue).ancestor('.item').removeClass(CURRENT_CLASS);
+                    nlSubCityList.item(indexValue).hide();
+                }
+                indexValue = index;
+                nlCityList.item(index).ancestor('.item').addClass(CURRENT_CLASS);
+                nlSubCityList.item(index).show();
+            }, 'a');
+        },
+        // 切换地理位置中商圈和地标
+        initSwitchSubGeoTab: function () {
+            var ndSubGeoTabWrapper = Y.one('.J-sub-geo-tab-wrapper'),
+                nlSubGeoTab,
+                type;
+            if (ndSubGeoTabWrapper) {
+                nlSubGeoTab = ndSubGeoTabWrapper.all('.J-sub-geo-tab');
+                ndSubGeoTabWrapper.delegate('click', function () {
+                    type = this.getData('type');
+                    nlSubGeoTab.removeClass('current');
+                    this.addClass('current');
+                    if (type === "area") {
+                        Y.one('.J-area-block').show();
+                        Y.one('.J-landmark-block').hide();
+                    } else {
+                        Y.one('.J-area-block').hide();
+                        Y.one('.J-landmark-block').show();
+                    }
+                }, '.J-sub-geo-tab');
+            }
+        },
+        // 联络点城市推广
+        recommendContactCity: function (data) {
+            Y.use('mt-dialog', function (Y) {
+                var dialog,
+                    COOKIE_NAME = 'rcc',
+                    DELIMITER = '|',
+                    DIALOG_ID = 'recommand-contact-city-dialog',
+                    TPL = '<div class="recommand">' +
+                        '    <p>美团网{contactName}站正式上线啦！</p>' +
+                        '    <p>里面有更丰富的{geo}团购哦！</p>' +
+                        '</div>' +
+                        '<a href="{url}" gaevent="layer/smallcity/{contactSlug}" class="btn">前往{contactName}站</a> ' +
+                        '<a href="javascript:void(0)" gaevent="layer/stay/{slug}" class="close">留在{name}站</a>';
+
+                dialog = new Y.mt.Dialog({
+                    id: DIALOG_ID,
+                    width: '360px',
+                    content: Y.Lang.sub(TPL, data)
+                });
+                dialog.open();
+                Y.one('#' + DIALOG_ID).delegate('click', function () {
+                    var expires = $Cookie.getExpiresDate(7, 0, 0),
+                        cookie = $Cookie.get(COOKIE_NAME),
+                        slugList = cookie ? cookie.split(DELIMITER) : [],
+                        slug = data.contactSlug;
+                    if (Y.Array.indexOf(slug, slugList) === -1) slugList.push(slug);
+                    $Cookie.set(COOKIE_NAME, slugList.join(DELIMITER), expires, '/', '.' + M.DOMAIN_HOST);
+                }, '.close');
+            });
+        },
+
+        // APP二维码
+        initAppQrcode: function () {
+            var ndAppQrcode = Y.one('.J-qrcode'),
+            QRCODE_COOKIE_NAME = 'appqrcode';
+
+            if (ndAppQrcode && !$Cookie.get(QRCODE_COOKIE_NAME)) {
+                ndAppQrcode.show();
+
+                ndAppQrcode.delegate('click', function (e) {
+                    e.halt();
+                    // 过期时间1天
+                    var expiresDate = $Cookie.getExpiresDate(1, 0, 0);
+
+                    ndAppQrcode.remove(true);
+                    $Cookie.set(QRCODE_COOKIE_NAME, '1', expiresDate, '/', '.' + M.DOMAIN_HOST);
+                }, '.close');
+            }
+        },
+
+        // 楼层导航
+        Elevator: {
+            init: function (node, conf) {
+                var sticky,
+                    defConf = {
+                        vAlign: 'top',
+                        vTopOffset: 0,
+                        mainAreaWidth: 1200,
+                        side: 'left',
+                        hAlign: 'right',
+                        vBottomOffset: 140,
+                        bottomEdge: '.site-info-w',
+                        hideWhenTooNarrow: true
+                    };
+
+                Y.mix(conf, defConf);
+
+                Y.use('uix-sticky', function (Y) {
+                    sticky = new Y.mt.uix.Sticky(node, conf);
+                });
+            }
+        },
+
+        Lottery: {
+            init: function (ndLotteryContainer) {
+                var ndPreBtn = ndLotteryContainer.next('.pre-next').one('.mt-slider-previous'),
+                    ndNextBtn = ndLotteryContainer.next('.pre-next').one('.mt-slider-next'),
+                    ndLotterTriggerContainer = ndLotteryContainer.next('.trigger-container'),
+                    nlLtSliders;
+
+                Y.use('mt-bigrender', 'w-slider', function () {
+                    var ltParams,
+                        lotterySlider;
+                    Y.mt.BigRender.loadImmediately(ndLotteryContainer.ancestor('.lottery'));
+
+                    nlLtSliders = ndLotteryContainer.all('.slider');
+                    // 当展示的抽奖单超过两个才做成轮播
+                    if (nlLtSliders.size() >= 2) {
+                        ltParams = {
+                            srcNode: '.lottery',
+                            effect: 'slideHorizontal',
+                            duration: 400,
+                            lazyloading: true,
+                            pnAutoHide: true,
+                            sheetContainer: ndLotteryContainer,
+                            triggerContainer: ndLotterTriggerContainer,
+                            previous: ndPreBtn,
+                            next: ndNextBtn
+                        };
+                        lotterySlider = new Y.mt.widget.Slider(ltParams);
+                        lotterySlider.render();
+                    }
+                });
+            }
+        },
+
+
+        Topic: {
+            init: function (ndTopicContainer, config) {
+
+                addMeizhoukanToTopic(config);
+                function addMeizhoukanToTopic (cityId) {
+                    // 处理美周刊，如果改城市有美周刊，首页专题第一帧固定放置美周刊
+                    $IO('/meizhoukan/have/' + cityId, {
+                        method: 'get',
+                        on: {
+                            success: function (id, o) {
+                                var res = $Util.getEvalRes(o);
+                                if (res) {
+                                    if (res.have) {
+                                        var meizhoukanHtml = getMeizhoukanHtml(res);
+                                        ndTopicContainer.prepend(meizhoukanHtml);
+                                        ndTopicContainer.get('parentNode').one('.trigger-container').prepend('<li class="trigger trigger-item mt-slider-trigger" href="javascript:void(0);"></li>');
+                                    }
+                                    generateTopicSlider();
+                                }
+                            },
+                            failure: function () {
+                                generateTopicSlider();
+                            }
+                        }
+                    });
+                    
+                }
+                function getMeizhoukanHtml(data) {
+                    var pic = data.pic.replace('/w.h/', '/200.190/');
+                    var html = '<li class="slider">' +
+                        '<a class="topic__meizhoukan" href="' + data.url + '" target="_blank" data-mod-idx="meizhoukanEntrance">' +
+                        '<span class="highlight"></span>' +
+                        '<p class="title--main">' + data.mainTitle + '</p>' +
+                        '<p class="title--deputy">' + data.deputyTitle + '</p>' +
+                        '<img alt="' + data.mainTitle + '" src="' + pic + '" width="206" height="120" />' +
+                        '</a>';
+                    return html;
+                }
+
+                ndTopicContainer.get('parentNode').show();
+
+                function generateTopicSlider () {
+                    var ndTopicPreBtn = ndTopicContainer.next('.pre-next').one('.mt-slider-previous'),
+                        ndTopicNextBtn = ndTopicContainer.next('.pre-next').one('.mt-slider-next'),
+                        ndTopicTriggerContainer = ndTopicContainer.next('.trigger-container'),
+                        nlTopicSliders;
+
+                    Y.use('mt-bigrender', 'w-slider', function () {
+                        var spParams,
+                            topicSlider;
+                        Y.mt.BigRender.loadImmediately(ndTopicContainer.ancestor('.special'));
+
+                        nlTopicSliders = ndTopicContainer.all('.slider');
+                        // 当展示的专题活动超过两个时，创建轮播
+                        if (nlTopicSliders.size() >= 2) {
+                            spParams = {
+                                srcNode: '.topic',
+                                effect: 'slideHorizontal',
+                                duration: 400,
+                                lazyloading: true,
+                                pnAutoHide: true,
+                                sheetContainer: ndTopicContainer,
+                                triggerContainer: ndTopicTriggerContainer,
+                                previous: ndTopicPreBtn,
+                                next: ndTopicNextBtn
+                            };
+                            topicSlider = new Y.mt.widget.Slider(spParams);
+                            topicSlider.render();
+                        }
+                    });
+
+                }
+            }
+        },
+        
+        Hots: {
+            init: function (ndContainer) {
+                if (!ndContainer) return;
+                Y.use('mt-bigrender', function (Y) {
+                    Y.mt.BigRender.init(ndContainer);
+                });
+            },
+            loadExtra: function (ndContainer) {
+                var ndCountdown = ndContainer.one('.J-hots-countdown');
+                Y.mt.www.Index.initHotsCountdown(ndCountdown);
+
+                var ndSlider = ndContainer.one('.J-hots-deals');
+                if (!ndSlider) return;
+
+                M.load(function () {
+                    Y.use('w-slider', function () {
+                        Y.mt.BigRender.loadImmediately(ndSlider);
+                        var ndSheetContainer = ndSlider.one('.reco-slides__slides'),
+                            nlSheet = ndSheetContainer && ndSheetContainer.all('> li'),
+                            ndPrevious = ndSlider.one('.reco-slides__roll--blacksquare--previous'),
+                            ndNext = ndSlider.one('.reco-slides__roll--blacksquare--next'),
+                            slider,
+                            config = {
+                                srcNode: ndSlider,
+                                sheetContainer: ndSheetContainer,
+                                previous: ndPrevious,
+                                next: ndNext,
+                                effect: 'slideFadeIn',
+                                pnAutoHide: true,
+                                lazyloading: true,
+                                interval: 5000
+                            };
+
+                        if (!nlSheet || nlSheet.size() < 2) {
+                            return;
+                        }
+                        slider = new Y.mt.widget.Slider(config);
+                        slider.render();
+
+                        Y.mt.Ajax.io({
+                            uri: '/index/hotdeals',
+                            method: 'post',
+                            on: {
+                                success: function (id, response) {
+                                    Y.all('.hotdeal__detail').each(function (nd) {
+                                        var dealid = nd.getData('dealid'),
+                                            res = response.data;
+                                        if (res[dealid] && res[dealid]['maxreduce']) {
+                                            nd.append('<span class="f1 description">手机购买立减¥' + res[dealid]['maxreduce'] + '</span>');
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    });
+                });
+
+            }
+        },
+
+        DealList: {
+            init: function (ndContainer, bigrender) {
+                if (bigrender) {
+                    Y.mt.www.BigRender.init(ndContainer);
+                    Y.mt.www.showGeoMask(ndContainer, '.deal-tile');
+                }
+                if (ndContainer.hasClass('J-scrollloader')) {
+                    Y.use('mt-scrollloader', function(Y) {
+                        // FECOS-644 添加异步请求是否合法判断的回调
+                        var callback = Y.mt.www.AntiCrawl.showVerifyDialog;
+                        var scrollLoader = new Y.mt.ScrollLoader(ndContainer, {'callback': callback});
+                        scrollLoader.on(Y.mt.www.Index.DealList.ScrollLoaderEvents);
+                        scrollLoader.run();
+                    });
+                }
+            },
+            ScrollLoaderEvents: {
+                start: function() {
+                    var self = this,
+                        conf = this.conf;
+
+                    if (!conf.dealids && M.ASYNC_PAGE_VIEW_DATA && M.ASYNC_PAGE_VIEW_DATA.deals) {
+                        conf.dealids = M.ASYNC_PAGE_VIEW_DATA.deals;
+                        if (M.ASYNC_PAGE_VIEW_DATA.acms) {
+                            conf.acms = M.ASYNC_PAGE_VIEW_DATA.acms;
+                        }
+                    }
+                    if (conf.dealids) {
+                        M.load(function () {
+                            Y.use('mt-beacon', function (Y) {
+                                Y.mt.beacon.asynclog({
+                                    deals: self.conf.dealids
+                                });
+                            });
+                        });
+                        conf.deals = conf.dealids.split(',');
+                    }
+                },
+                beforeLoad: function() {
+                    // 准备post数据
+                    var conf = this.conf,
+                        deals = conf.deals,
+                        len = deals && deals.length || 0,
+                        data = conf.data = conf.data || {};
+
+                    // data.params为传给php端生成deallist html函数的参数
+                    if (data.params && typeof data.params === 'object') {
+                        data.params = Y.JSON.stringify(data.params);
+                    }
+                    data.offset = conf.offset;
+                    conf.offset += conf.limit;
+
+                    if (data.offset >= len) {
+                        // 没有dealid，且没指明第一次请求时获取dealid，则终止
+                        this.fire('stop');
+                        return;
+                    }
+
+                    data.dealids = deals.slice(data.offset, conf.offset).join(',');
+                    if (conf.acms) {
+                        data.acms = conf.acms.slice(data.offset, conf.offset).join(',');
+                    }
+                    this.data = data;
+                },
+                beforeContentReady: function(response, extra) {
+                    Y.mt.www.trackApiTiming(response.bem || null, extra.reqStart, 'mall-deallist');
+                },
+                contentReady: function() {
+                    Y.mt.www.ImageLazyLoader.init(this.ndContainer);
+                    // 发送异步加载的deal 的 acm 统计展现日志
+                    if (this.data.acms) {
+                        window._mbq('sendReclsView', this.data.acms);
+                    }
+                 }
+             }
+        },
+
+        /**
+         * 查找一个楼层中最后一排的第一个单子
+         * @params node category 楼层的节点
+         * @return node lastFirstNode 楼层的最后一排的第一个节点
+         * 取这个节点计算切换楼层状态，最后一排可能只有一个单子
+         */
+        findLastFirstNode: function (ndCategory) {
+            var colCount = 3,
+                len = ndCategory.all('.deal-tile').size(),
+                extra;
+            extra = len % colCount === 0 ? 3 : len % colCount;
+            return ndCategory.all('.deal-tile').item(len - extra);
+        },
+
+
+        /**
+         * @description 倒计时
+         * @method initHotsCountDown
+         * 规则：20:00-11:00按距离11点开始倒计时；11:00-13:00据结束13点倒计时；13:00-18:00据18点倒计时；18:00-20:00据20点倒计时
+         */
+        initHotsCountdown: function (ndCountdown) {
+            if (!ndCountdown) return;
+
+            var isActiveOn = false,
+                ndCountdownTip = ndCountdown.one('.J-countdown-status'),
+                countdown;
+
+            function calcRemainTime() {
+                var now = new Date(),
+                    hour = now.getHours(),
+                    countTime = 0,
+                    timestamp = [[11, 13], [18, 20]];
+
+                isActiveOn = false;
+
+                for (var i = 0; i < timestamp.length; i++) {
+                    var spreeBegin = timestamp[i][0],
+                        spreeEnd = timestamp[i][1];
+
+                    if (hour < spreeBegin) {
+                        countTime = now.setHours(spreeBegin, 0, 0);
+                        break;
+                    }
+                    if (hour >= spreeBegin && hour < spreeEnd) {
+                        countTime = now.setHours(spreeEnd, 0, 0);
+                        isActiveOn = true;
+                        break;
+                    }
+                }
+                if (!countTime) {
+                    countTime = new Date(now.setDate(now.getDate() + 1));
+                    countTime.setHours(11, 0, 0);
+                }
+
+                return countTime - Date.now();
+            }
+
+            function tickCountdown() {
+                if (countdown) {
+                    countdown.reset(calcRemainTime());
+                    return;
+                }
+
+                Y.use('www-countdown', function (Y) {
+                    var padZero = function (num) {
+                        return ('0' + num).slice(-2);
+                    };
+                    var Countdown = Y.mt.www.Countdown;
+                    countdown = new Countdown(calcRemainTime(), {
+                        start: function () {
+                            var that = this;
+
+                            var nlSlots = ndCountdown.all(".J-time");
+                            that.nlSlots = nlSlots;
+
+                            if (!nlSlots) return;
+
+                            // 取返回值的1~3 （第0个为天，此处不需要）
+                            nlSlots.each(function (node, index) {
+                                node.setHTML(padZero(that.time[index + 1])).show();
+                            });
+
+                            // 新首页根据活动状态设置不同描述文字
+                            if (isActiveOn) {
+                                if (ndCountdownTip) {
+                                    ndCountdownTip.set('text', '距结束');
+                                }
+                                ndCountdown.replaceClass('countdown-begin', 'countdown-end').show();
+                            } else {
+                                if (ndCountdownTip) {
+                                    ndCountdownTip.set('text', '距开始');
+                                }
+                                ndCountdown.replaceClass('countdown-end', 'countdown-begin').show();
+                            }
+                        },
+                        step: function (num, index) {
+                            if (index) {
+                                this.nlSlots.item(index - 1).setHTML(padZero(num));
+                            }
+                        },
+                        done: function () {
+                            countdown.reset(calcRemainTime());
+                            countdown.tick();
+                        }
+                    });
+
+                    // 启动倒计时
+                    countdown.tick();
+                });
+            }
+
+            tickCountdown();
+        },
+
+        /**
+         * 首页浮层代金券
+         */
+        FloatCard: {
+            success: function (id, res) {
+                var COOKIE_NAME = res.cn,
+                    ndBd = Y.one('body'),
+                    ndFloat = Y.Node.create(res.html);
+
+                ndBd.prepend(ndFloat);
+                ndFloat.show();
+                ndFloat.delegate('click', function () {
+                    var expiresDate = $Cookie.getExpiresDate(3, 0, 0);
+                    ndFloat.remove(true);
+                    $Cookie.set(COOKIE_NAME, '3', expiresDate, '/', '.' + M.DOMAIN_HOST);
+                }, '.close');
+            }
+        }
+    };
+},
+//version
+'1.0.0',
+//dependency
+{
+    requires: [
+        'json-stringify',
+        'www-base',
+        'www-anti-crawl',
+        'transition'
+    ]
+});
+;/*jshint white:true, unused:true,curly:false, plusplus:false, latedef:false*/
+/*global M*/
+/**
+ * 搜索页
+ *
+ * @module www-search
+ */
+M.add('www-search', function (Y) {
+    /**
+     * 搜索页
+     * @class search
+     * @namespace Y.mt.www
+     * @static
+     */
+    Y.mt.www.search = {
+        // search page sidebar
+        sidebar: {
+            init: function (ndElement) {
+                ndElement.fire("hub:pause");
+
+                M.load(function () {
+                    ndElement.fire("hub:resume");
+                });
+            },
+            beforeupdate: function (url, config) {
+                return {
+                    act: url,
+                    post: {
+                        query: config || ""
+                    }
+                };
+            },
+            update: function (ndElement, value) {
+                ndElement.setHTML(value);
+                Y.mt.www.ImageLazyLoader.loadImmediately('.site-sidebar');
+            }
+        }
+    };
+
+},
+// version
+'1.0.0',
+
+// dependency
+{
+    requires: [
+        'www-base'
+    ]
+});
+;

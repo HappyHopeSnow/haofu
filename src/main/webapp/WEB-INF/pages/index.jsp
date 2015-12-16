@@ -99,8 +99,8 @@
 			<a class="fl city" href="javascript:;">北京<span>切换城市</span></a>
 		</div>
 		<div class="hd_cont_c fl clearFix">
-			<input class="text fl" type="text" placeholder="请输入商品名称、地址等">
-			<input class="submit fl" type="submit" value="搜索">
+			<input class="text fl" id="key" type="text" placeholder="请输入商品名称、地址等">
+			<input class="submit fl" id="search" type="submit" value="搜索">
 			<div class="tuan_pos">
 				<a class="c_tuan" href="javascript:;">团购</a>
 				<a class="c_Business" href="javascript:;">商家</a>
@@ -1535,6 +1535,13 @@
 	initSlide('shop_slide','ul','slide_btn',300,4000,null,updatePage());
 	initSlide('raffle_slide','li','slide_btn',300,3500,slideByTab('raffle_tabs','span','btn fl','active'),tabSwitch('raffle_tabs','span','btn fl','active'));
 	initSlide('kill_slide','li','slide_btn',300,3000,slideByTab('kill_tabs','span','btn fl','active'),tabSwitch('kill_tabs','span','btn fl','active'));
+
+	$("#search").click(function(){
+		var key = $("#key").val();
+		//跳转到搜索结果页面
+		window.location.href="/s?key=" + key;
+	});
+
 </script>
 </body>
 </html>
