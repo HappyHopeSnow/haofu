@@ -1,4 +1,4 @@
-package com.haofu;
+package com.haofu.controller;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.ModelMap;

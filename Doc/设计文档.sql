@@ -152,9 +152,6 @@ CREATE TABLE user
 )ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4;
 
 
-  
-
-
 二.前端接口
 
 1.首页接口：
@@ -206,6 +203,11 @@ return user;
 
 6.进行注册提交
 /account/signupsubmit?username={}&password={}&province={}&city={}
+insert into user set status = 10 , name = username, password = password, province = {}, city = {};
 
 
 三.后台设置接口
+
+//集成easyUI
+
+//集成mybatis数据库
