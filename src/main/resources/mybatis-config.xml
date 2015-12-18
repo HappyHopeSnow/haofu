@@ -10,7 +10,7 @@
        </settings>
 
        <mappers>
-              <mapper resource="mapper/OrderMainDao.xml" />
+              <mapper resource="mapper/BusinessDao.xml" />
        </mappers>
 
 </configuration>

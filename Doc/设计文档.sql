@@ -51,14 +51,14 @@ CREATE TABLE user
   CREATE TABLE business
 (
 	id BIGINT NOT NULL AUTO_INCREMENT,
-	name varchar(128) not null default '''', -- 名称
-	desc varchar(1024) not null default '''', -- 商家简介
-	status int(11) NOT NULL DEFAULT ''0'',  -- 状态 ：0:-初始；10-发布；20-删除
+	name varchar(128) not null default '''' COMMENT "商品名称", -- 名称
+	descrp varchar(1024) not null default '''' COMMENT "商家简介", -- 商家简介
+	status int NOT NULL DEFAULT ''0'' c,  -- 状态 ：0:-初始；10-发布；20-删除
 	key varchar(512) not null default '''', -- 搜索关键字
 	sort int not null default ''0'', -- 查询排序
 	createTime DATETIME NOT NULL,  -- 创建时间
-    modifyTime DATETIME NOT NULL,  -- 修改时间
-    PRIMARY KEY (id)
+  modifyTime DATETIME NOT NULL,  -- 修改时间
+  PRIMARY KEY (id)
 )ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4;
 
   大分类表：BigClass:parentId =  1=美食；2=休闲娱乐 3=电影 4-购物 ；5=丽人 6=旅游
