@@ -6,10 +6,10 @@
     <result column="name" property="name" jdbcType="VARCHAR" />
     <result column="descrp" property="descrp" jdbcType="VARCHAR" />
     <result column="status" property="status" jdbcType="TINYINT" />
-    <result column="key" property="key" jdbcType="VARCHAR" />
+    <result column="search_key" property="searchKey" jdbcType="VARCHAR" />
     <result column="sort" property="sort" jdbcType="TINYINT" />
-    <result column="createTime" property="createtime" jdbcType="TIMESTAMP" />
-    <result column="modifyTime" property="modifytime" jdbcType="TIMESTAMP" />
+    <result column="create_time" property="createTime" jdbcType="TIMESTAMP" />
+    <result column="modify_time" property="modifyTime" jdbcType="TIMESTAMP" />
   </resultMap>
   <sql id="Example_Where_Clause" >
     <where >
@@ -70,7 +70,7 @@
     </where>
   </sql>
   <sql id="Base_Column_List" >
-    id, name, descrp, status, key, sort, createTime, modifyTime
+    id, name, descrp, status, search_key, sort, create_time, modify_time
   </sql>
   <select id="selectByExample" resultMap="BaseResultMap" parameterType="com.haofu.entity.BusinessExample" >
     select
@@ -104,11 +104,11 @@
   </delete>
   <insert id="insert" parameterType="com.haofu.entity.Business" useGeneratedKeys="true" keyProperty="id" >
     insert into business (id, name, descrp, 
-      status, key, sort, 
-      createTime, modifyTime)
+      status, search_key, sort, 
+      create_time, modify_time)
     values (#{id,jdbcType=BIGINT}, #{name,jdbcType=VARCHAR}, #{descrp,jdbcType=VARCHAR}, 
-      #{status,jdbcType=TINYINT}, #{key,jdbcType=VARCHAR}, #{sort,jdbcType=TINYINT}, 
-      #{createtime,jdbcType=TIMESTAMP}, #{modifytime,jdbcType=TIMESTAMP})
+      #{status,jdbcType=TINYINT}, #{searchKey,jdbcType=VARCHAR}, #{sort,jdbcType=TINYINT}, 
+      #{createTime,jdbcType=TIMESTAMP}, #{modifyTime,jdbcType=TIMESTAMP})
   </insert>
   <insert id="insertSelective" parameterType="com.haofu.entity.Business" useGeneratedKeys="true" keyProperty="id" >
     insert into business
@@ -125,17 +125,17 @@
       <if test="status != null" >
         status,
       </if>
-      <if test="key != null" >
-        key,
+      <if test="searchKey != null" >
+        search_key,
       </if>
       <if test="sort != null" >
         sort,
       </if>
-      <if test="createtime != null" >
-        createTime,
+      <if test="createTime != null" >
+        create_time,
       </if>
-      <if test="modifytime != null" >
-        modifyTime,
+      <if test="modifyTime != null" >
+        modify_time,
       </if>
     </trim>
     <trim prefix="values (" suffix=")" suffixOverrides="," >
@@ -151,17 +151,17 @@
       <if test="status != null" >
         #{status,jdbcType=TINYINT},
       </if>
-      <if test="key != null" >
-        #{key,jdbcType=VARCHAR},
+      <if test="searchKey != null" >
+        #{searchKey,jdbcType=VARCHAR},
       </if>
       <if test="sort != null" >
         #{sort,jdbcType=TINYINT},
       </if>
-      <if test="createtime != null" >
-        #{createtime,jdbcType=TIMESTAMP},
+      <if test="createTime != null" >
+        #{createTime,jdbcType=TIMESTAMP},
       </if>
-      <if test="modifytime != null" >
-        #{modifytime,jdbcType=TIMESTAMP},
+      <if test="modifyTime != null" >
+        #{modifyTime,jdbcType=TIMESTAMP},
       </if>
     </trim>
   </insert>
@@ -186,17 +186,17 @@
       <if test="record.status != null" >
         status = #{record.status,jdbcType=TINYINT},
       </if>
-      <if test="record.key != null" >
-        key = #{record.key,jdbcType=VARCHAR},
+      <if test="record.searchKey != null" >
+        search_key = #{record.searchKey,jdbcType=VARCHAR},
       </if>
       <if test="record.sort != null" >
         sort = #{record.sort,jdbcType=TINYINT},
       </if>
-      <if test="record.createtime != null" >
-        createTime = #{record.createtime,jdbcType=TIMESTAMP},
+      <if test="record.createTime != null" >
+        create_time = #{record.createTime,jdbcType=TIMESTAMP},
       </if>
-      <if test="record.modifytime != null" >
-        modifyTime = #{record.modifytime,jdbcType=TIMESTAMP},
+      <if test="record.modifyTime != null" >
+        modify_time = #{record.modifyTime,jdbcType=TIMESTAMP},
       </if>
     </set>
     <if test="_parameter != null" >
@@ -209,10 +209,10 @@
       name = #{record.name,jdbcType=VARCHAR},
       descrp = #{record.descrp,jdbcType=VARCHAR},
       status = #{record.status,jdbcType=TINYINT},
-      key = #{record.key,jdbcType=VARCHAR},
+      search_key = #{record.searchKey,jdbcType=VARCHAR},
       sort = #{record.sort,jdbcType=TINYINT},
-      createTime = #{record.createtime,jdbcType=TIMESTAMP},
-      modifyTime = #{record.modifytime,jdbcType=TIMESTAMP}
+      create_time = #{record.createTime,jdbcType=TIMESTAMP},
+      modify_time = #{record.modifyTime,jdbcType=TIMESTAMP}
     <if test="_parameter != null" >
       <include refid="Update_By_Example_Where_Clause" />
     </if>
@@ -229,17 +229,17 @@
       <if test="status != null" >
         status = #{status,jdbcType=TINYINT},
       </if>
-      <if test="key != null" >
-        key = #{key,jdbcType=VARCHAR},
+      <if test="searchKey != null" >
+        search_key = #{searchKey,jdbcType=VARCHAR},
       </if>
       <if test="sort != null" >
         sort = #{sort,jdbcType=TINYINT},
       </if>
-      <if test="createtime != null" >
-        createTime = #{createtime,jdbcType=TIMESTAMP},
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=TIMESTAMP},
       </if>
-      <if test="modifytime != null" >
-        modifyTime = #{modifytime,jdbcType=TIMESTAMP},
+      <if test="modifyTime != null" >
+        modify_time = #{modifyTime,jdbcType=TIMESTAMP},
       </if>
     </set>
     where id = #{id,jdbcType=BIGINT}
@@ -249,10 +249,10 @@
     set name = #{name,jdbcType=VARCHAR},
       descrp = #{descrp,jdbcType=VARCHAR},
       status = #{status,jdbcType=TINYINT},
-      key = #{key,jdbcType=VARCHAR},
+      search_key = #{searchKey,jdbcType=VARCHAR},
       sort = #{sort,jdbcType=TINYINT},
-      createTime = #{createtime,jdbcType=TIMESTAMP},
-      modifyTime = #{modifytime,jdbcType=TIMESTAMP}
+      create_time = #{createTime,jdbcType=TIMESTAMP},
+      modify_time = #{modifyTime,jdbcType=TIMESTAMP}
     where id = #{id,jdbcType=BIGINT}
   </update>
 </mapper>

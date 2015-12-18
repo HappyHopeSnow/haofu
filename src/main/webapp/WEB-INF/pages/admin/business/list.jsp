@@ -1,12 +1,17 @@
+<%@ page import="com.haofu.entity.Business" %>
 <%@ page contentType="text/html; charset=UTF-8" %>
+<%@ page import="java.util.*" %>
+<%
+    List<Business> businessList = (List<Business>) request.getAttribute("list");
+%>
 <script>
     function edit(id) {
-        openTab('编辑商家', '/vm/seller/toedit?id=' + id);
+        openTab('编辑商家', '/admin/business/toedit?id=' + id);
     }
     function del(id) {
         $.messager.confirm('确认删除', '确认要删除商家?', function (r) {
             if (r) {
-                $.getJSON("/vm/seller/del.json", {"id": id}, function (data) {
+                $.getJSON("/admin/business/del.json", {"id": id}, function (data) {
                     if (data.status == 200) {
                     } else {
                         alert("删除失败")
@@ -33,9 +38,8 @@
             columns: [[
                 {field: 'id', title: 'id', width: 30, align: 'center'},
                 {field: 'name', title: '商家姓名', width: 30, align: 'center'},
-                {field: 'sysUserId', title: '用户id', width: 30, align: 'center'},
                 {field: 'mobile', title: '手机', width: 30, align: 'center'},
-                {field: 'aliName', title: '旺旺id', width: 30, align: 'center'},
+                {field: 'searchKey', title: '搜索关键字', width: 30, align: 'center'},
                 {field: 'qq', title: 'qq', width: 30, align: 'center'},
                 {field: 'mail', title: '邮箱', width: 30, align: 'center'},
                 {field: 'descrp', title: '描述', width: 30, align: 'center'},
@@ -57,7 +61,7 @@
             buttons: [{
                 iconCls: 'icon-add',
                 handler: function () {
-                    openTab('添加商家', '/vm/seller/toadd')
+                    openTab('添加商家', '/admin/business/toadd')
                 }
             }]
         });
@@ -81,8 +85,8 @@
                 <li> 点击列表框头部的列名可以排序, 可以排序的列有:
                     <br>推荐值, 官方价, 内部价, 创建时间
                 </li>
-                <li>如有问题或建议, 通知管理员 陈新华 <a target=blank
-                                          href=http://wpa.qq.com/msgrd?V=3&uin=953924393&Site=star&Menu=yes><img
+                <li>如有问题或建议, 通知管理员 连乐 <a target=blank
+                                          href=http://wpa.qq.com/msgrd?V=3&uin=364214799&Site=star&Menu=yes><img
                         border="0" SRC=http://wpa.qq.com/pa?p=1:953924393:9 alt="q我"></a></li>
             </ol>
 

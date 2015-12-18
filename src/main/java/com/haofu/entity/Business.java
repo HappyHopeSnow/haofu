@@ -1,5 +1,7 @@
 package com.haofu.entity;
 
+import com.haofu.model.BusinessModel;
+
 import java.io.Serializable;
 import java.util.Date;
 
@@ -12,15 +14,22 @@ public class Business implements Serializable {
 
     private Byte status;
 
-    private String key;
+    private String searchKey;
 
     private Byte sort;
 
-    private Date createtime;
+    private Date createTime;
 
-    private Date modifytime;
+    private Date modifyTime;
 
     private static final long serialVersionUID = 1L;
+
+    public Business(){}
+    public Business(BusinessModel model) {
+        this.name = model.getName();
+        this.descrp = model.getDescrp();
+        this.searchKey = model.getSearchKey();
+    }
 
     public Long getId() {
         return id;
@@ -54,12 +63,12 @@ public class Business implements Serializable {
         this.status = status;
     }
 
-    public String getKey() {
-        return key;
+    public String getSearchKey() {
+        return searchKey;
     }
 
-    public void setKey(String key) {
-        this.key = key == null ? null : key.trim();
+    public void setSearchKey(String searchKey) {
+        this.searchKey = searchKey == null ? null : searchKey.trim();
     }
 
     public Byte getSort() {
@@ -70,19 +79,19 @@ public class Business implements Serializable {
         this.sort = sort;
     }
 
-    public Date getCreatetime() {
-        return createtime;
+    public Date getCreateTime() {
+        return createTime;
     }
 
-    public void setCreatetime(Date createtime) {
-        this.createtime = createtime;
+    public void setCreateTime(Date createTime) {
+        this.createTime = createTime;
     }
 
-    public Date getModifytime() {
-        return modifytime;
+    public Date getModifyTime() {
+        return modifyTime;
     }
 
-    public void setModifytime(Date modifytime) {
-        this.modifytime = modifytime;
+    public void setModifyTime(Date modifyTime) {
+        this.modifyTime = modifyTime;
     }
 }

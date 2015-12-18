@@ -33,7 +33,7 @@
         <AsyncLogger name="org.mybatis.spring" level="info">
             <AppenderRef ref="Console" />
         </AsyncLogger>
-        <AsyncLogger name="com.jd.las.middleware" level="debug">
+        <AsyncLogger name="com.haofu" level="debug">
             <AppenderRef ref="WebMessage" />
         </AsyncLogger>
     </Loggers>
