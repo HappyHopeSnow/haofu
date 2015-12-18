@@ -23,8 +23,8 @@ import java.util.List;
 @Service
 public class BusinessServiceImpl implements BusinessService {
 
-    @Resource
-    BusinessDao businessDao;
+    @Autowired
+    private BusinessDao businessDao;
 
     @Override
     public int saveOrUpdate(BusinessModel businessModel) {
